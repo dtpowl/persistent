@@ -107,6 +107,7 @@ library
     Database.Persist.Sql.Types
     Database.Persist.Types.Base
     Database.Persist.Types.Span
+    Database.Persist.TH.Internal.ModelValidations
 
   -- These modules only make sense for compilers with access to DerivingVia
   if impl(ghc >=8.6.1)

@@ -141,6 +141,8 @@ import Database.Persist.EntityDef.Internal (EntityDef(..))
 import Database.Persist.ImplicitIdDef (autoIncrementingInteger)
 import Database.Persist.ImplicitIdDef.Internal
 
+import Database.Persist.TH.Internal.ModelValidations (validateModelFileContents)
+
 #if MIN_VERSION_template_haskell(2,18,0)
 conp :: Name -> [Pat] -> Pat
 conp name pats = ConP name [] pats
@@ -223,6 +225,7 @@ persistManyFileWith :: PersistSettings -> [FilePath] -> Q Exp
 persistManyFileWith ps fps = do
     mapM_ qAddDependentFile fps
     ss <- mapM (\fp -> (fp,) <$> (qRunIO . getFileContents) fp) fps
+    _ <- mapM (uncurry validateModelFileContents) ss
     parseReferences ps (map (\(fp, content) -> (Just $ sourceLoc fp, content)) ss)
     where
         sourceLoc path = SourceLoc {locFile = T.pack path, locStartLine = 1, locStartCol = 1}
