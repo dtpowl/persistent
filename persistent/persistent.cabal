@@ -36,9 +36,11 @@ library
     , fast-logger           >=2.4
     , http-api-data         >=0.3
     , lift-type             >=0.1.0.0  && <0.2.0.0
+    , megaparsec
     , monad-logger          >=0.3.28
     , mtl
     , path-pieces           >=0.2
+    , replace-megaparsec
     , resource-pool         >=0.2.3
     , resourcet             >=1.1.10
     , scientific
@@ -79,6 +81,7 @@ library
     Database.Persist.PersistValue
     Database.Persist.Quasi
     Database.Persist.Quasi.Internal
+    Database.Persist.Quasi.Internal.ModelParser
     Database.Persist.Sql
     Database.Persist.Sql.Migration
     Database.Persist.Sql.Types.Internal
@@ -135,6 +138,7 @@ test-suite test
     , fast-logger
     , hspec                 >=2.4
     , http-api-data
+    , megaparsec
     , monad-logger
     , mtl
     , path-pieces
