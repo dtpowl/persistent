@@ -21,6 +21,7 @@ module Database.Persist.Quasi.Internal.ModelParser
     , memberBlockAttrs
     ) where
 
+import Prelude hiding (lines, unlines)
 import Data.List.NonEmpty (NonEmpty (..))
 import qualified Data.List.NonEmpty as NEL
 import qualified Data.Map as M
@@ -28,12 +29,12 @@ import Data.Maybe
 import Data.Text (Text, pack, unlines, unpack)
 import Data.Void
 import Database.Persist.Types
+import Database.Persist.Types.Span
 import Language.Haskell.TH.Syntax (Lift)
 import Replace.Megaparsec (sepCap)
 import Text.Megaparsec hiding (Token)
 import Text.Megaparsec.Char
 import qualified Text.Megaparsec.Char.Lexer as L
-import Prelude hiding (lines, unlines)
 
 type Parser = Parsec Void String
 

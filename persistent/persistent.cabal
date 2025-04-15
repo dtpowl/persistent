@@ -99,6 +99,7 @@ library
     Database.Persist.TH
     Database.Persist.TH.Internal
     Database.Persist.Types
+    Database.Persist.Types.Span
 
   other-modules:
     Database.Persist.Sql.Class
@@ -110,7 +111,6 @@ library
     Database.Persist.Sql.Run
     Database.Persist.Sql.Types
     Database.Persist.Types.Base
-    Database.Persist.Types.Span
 
   -- These modules only make sense for compilers with access to DerivingVia
   if impl(ghc >=8.6.1)
