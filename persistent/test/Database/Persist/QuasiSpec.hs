@@ -342,6 +342,8 @@ User
     name            Text
     emailFirst      Text
     emailSecond     Text
+    !yes            Int
+    ~no             Int
 
     UniqueEmail emailFirst emailSecond
 
@@ -399,7 +401,7 @@ User
             let [user] = defs definitions
             evaluate (unboundEntityDef user)
                 `shouldErrorWithMessage`
-                    "4:20:\n  |\n4 |     age  (Maybe Int\n  |                    ^\nunexpected newline\nexpecting '\"', ''', '(', ')', '.', '[', '\\', ']', '_', alphanumeric character, space, or tab\n"
+                    "4:20:\n  |\n4 |     age  (Maybe Int\n  |                    ^\nunexpected newline\nexpecting '!', '\"', ''', '(', ')', '.', '[', '\\', ']', '_', '~', alphanumeric character, space, or tab\n"
 
         it "errors on duplicate cascade update declarations" $ do
             let definitions = [st|

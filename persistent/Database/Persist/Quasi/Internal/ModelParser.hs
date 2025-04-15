@@ -97,6 +97,10 @@ contentChar =
         , char '_'
         , char '\''
         , char '"'
+        , char '!'
+        , char '~'
+        , char '-'
+        , char ':'
         , try escapedParen
         , char '\\'
         ]
