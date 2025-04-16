@@ -145,6 +145,7 @@ equality = label "equality expression" $ do
         rhs <-
             choice
                 [ try quotationInner
+                , try sqlLiteral
                 , try parenthetical'
                 , some $ contentChar <|> char '(' <|> char ')'
                 ]
@@ -153,6 +154,24 @@ equality = label "equality expression" $ do
     quotationInner = do
         str <- quotation'
         pure $ "\"" <> str <> "\""
+
+sqlTypeName :: Parser String
+sqlTypeName = some $ choice [ alphaNumChar
+                            , char '_'
+                            ]
+
+sqlLiteral :: Parser String
+sqlLiteral = label "SQL literal" $ do
+  quote <- L.lexeme spaceConsumer $ char '\'' *> manyTill charLiteral (char '\'')
+  st <- optional $ do
+    colons <- string "::"
+    tn <- sqlTypeName
+    pure $ colons <> tn
+  pure $ mconcat [ "'"
+                 , quote
+                 , "'"
+                 , maybe "" id st
+                 ]
 
 quotation :: Parser Token
 quotation = label "quotation" $ do

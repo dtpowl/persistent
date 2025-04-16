@@ -115,6 +115,20 @@ spec = describe "Quasi" $ do
                         ]
                     )
 
+        it "handles SQL literals with no specified type" $
+          tokenize "attr='[\"ab\\'cd\", 1, 2]'" `shouldBe`
+              Right
+                  (
+                    [Equality "attr" "'[\"ab'cd\", 1, 2]'"]
+                  )
+
+        it "handles SQL literals with a specified type" $
+          tokenize "attr='{\"\\'a\\'\": [1, 2.2, \"\\'3\\'\"]}'::type_name" `shouldBe`
+              Right
+                  (
+                    [Equality "attr" "'{\"'a'\": [1, 2.2, \"'3'\"]}'::type_name"]
+                  )
+
         it "should error if quotes are unterminated" $ do
             first errorBundlePretty (tokenize "\"foo bar") `shouldBe`
               Left("1:9:\n  |\n1 | \"foo bar\n  |         ^\nunexpected end of input\nexpecting '\"' or literal character\n")
@@ -401,7 +415,7 @@ User
             let [user] = defs definitions
             evaluate (unboundEntityDef user)
                 `shouldErrorWithMessage`
-                    "4:20:\n  |\n4 |     age  (Maybe Int\n  |                    ^\nunexpected newline\nexpecting '!', '\"', ''', '(', ')', '.', '[', '\\', ']', '_', '~', alphanumeric character, space, or tab\n"
+                    "4:20:\n  |\n4 |     age  (Maybe Int\n  |                    ^\nunexpected newline\nexpecting '!', '\"', ''', '(', ')', '-', '.', ':', '[', '\\', ']', '_', '~', alphanumeric character, space, or tab\n"
 
         it "errors on duplicate cascade update declarations" $ do
             let definitions = [st|
