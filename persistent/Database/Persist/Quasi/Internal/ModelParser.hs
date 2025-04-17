@@ -144,16 +144,16 @@ equality = label "equality expression" $ do
         _ <- char '='
         rhs <-
             choice
-                [ try quotationInner
+                [ try quotation'
                 , try sqlLiteral
                 , try parenthetical'
                 , some $ contentChar <|> char '(' <|> char ')'
                 ]
         pure $ Equality (pack lhs) (pack rhs)
-  where
-    quotationInner = do
-        str <- quotation'
-        pure $ "\"" <> str <> "\""
+--  where
+--    quotationInner = do
+--        str <- quotation'
+--        pure $ "\"" <> str <> "\""
 
 sqlTypeName :: Parser String
 sqlTypeName = some $ choice [ alphaNumChar
