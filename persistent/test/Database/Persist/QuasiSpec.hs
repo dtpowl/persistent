@@ -137,7 +137,7 @@ spec = describe "Quasi" $ do
             tokenize "x=\"foo bar\"  \"baz\"" `shouldBe`
                 Right
                     (
-                        [ Equality "x" "\"foo bar\""
+                        [ Equality "x" "foo bar"
                         , Quotation "baz"
                         ]
                     )
@@ -165,7 +165,7 @@ spec = describe "Quasi" $ do
             tokenize "x=(foo bar)  (baz)" `shouldBe`
                 Right
                     (
-                        [ Equality "x" "(foo bar)"
+                        [ Equality "x" "foo bar"
                         , Parenthetical "baz"
                         ]
                     )
@@ -201,7 +201,7 @@ spec = describe "Quasi" $ do
             tokenize "y=\"baz\\\"\"" `shouldBe`
                 Right
                     (
-                        [ Equality "y" "\"baz\"\""
+                        [ Equality "y" "baz\""
                         ]
                     )
 
@@ -253,7 +253,7 @@ spec = describe "Quasi" $ do
                     (
                         [ PText "foo"
                         , PText "bar"
-                        , Equality "baz" "(bin\")"
+                        , Equality "baz" "bin\""
                         ]
                     )
 
