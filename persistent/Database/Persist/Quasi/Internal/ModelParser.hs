@@ -170,7 +170,7 @@ sqlLiteral = label "SQL literal" $ do
   pure $ mconcat [ "'"
                  , quote
                  , "'"
-                 , maybe "" id st
+                 , fromMaybe "" st
                  ]
 
 quotation :: Parser Token
