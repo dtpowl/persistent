@@ -1,8 +1,9 @@
 # Changelog for persistent
 
-# 2.15.1.1
+# 2.16.0.0
 
 * [#1584](https://github.com/yesodweb/persistent/pull/1584)
+    * Rename `Span` to `SourceSpan`
     * Parse entity definitions using Megaparsec.
     * Support Haddock-style multiline pre-comments.
 

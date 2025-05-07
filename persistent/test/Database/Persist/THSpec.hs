@@ -45,7 +45,7 @@ import Test.QuickCheck.Gen (Gen)
 import Database.Persist
 import Database.Persist.EntityDef.Internal
 import Database.Persist.Quasi.Internal (SourceLoc(..), sourceLocFromTHLoc)
-import Database.Persist.Types.Span
+import Database.Persist.Types.SourceSpan
 import Database.Persist.Sql
 import Database.Persist.Sql.Util
 import Database.Persist.TH
@@ -336,7 +336,7 @@ spec = describe "THSpec" $ do
                     }
         describe "entityDef" $ do
             it "correct position" $ do
-                let Just theSpan = entitySpan simpleCascadeDef
+                let Just theSpan = entitySourceSpan simpleCascadeDef
                 theSpan `shouldSatisfy` ((> locStartLine personDefBeforeLoc) . spanStartLine)
                 theSpan `shouldSatisfy` (\s -> spanStartLine s < spanEndLine s)
                 theSpan `shouldSatisfy` ((< locStartLine personDefAfterLoc) . spanEndLine)
@@ -389,7 +389,7 @@ spec = describe "THSpec" $ do
                             -- We cannot test this is a precise value without
                             -- being really fragile, but we have another test to
                             -- verify the line is in range.
-                            , entitySpan = entitySpan simpleCascadeDef
+                            , entitySourceSpan = entitySourceSpan simpleCascadeDef
                             }
         it "has the cascade on the field def" $ do
             fieldCascade subject `shouldBe` expected

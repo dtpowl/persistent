@@ -99,7 +99,7 @@ library
     Database.Persist.TH
     Database.Persist.TH.Internal
     Database.Persist.Types
-    Database.Persist.Types.Span
+    Database.Persist.Types.SourceSpan
 
   other-modules:
     Database.Persist.Sql.Class

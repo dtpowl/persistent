@@ -14,9 +14,8 @@ module Database.Persist.Quasi.Internal.ModelParser
     , parsedEntityDefIsSum
     , parsedEntityDefEntityAttributes
     , parsedEntityDefFieldAttributes
-    , parsedEntityDefFieldComments
     , parsedEntityDefExtras
-    , parsedEntityDefSpan
+    , parsedEntityDefSourceSpan
     , parseSource
     , memberBlockAttrs
     ) where
@@ -26,10 +25,12 @@ import Data.List.NonEmpty (NonEmpty (..))
 import qualified Data.List.NonEmpty as NEL
 import qualified Data.Map as M
 import Data.Maybe
-import Data.Text (Text, pack, unlines, unpack)
+import qualified Data.Set as S
+import Data.Text (Text)
+import qualified Data.Text as Text
 import Data.Void
 import Database.Persist.Types
-import Database.Persist.Types.Span
+import Database.Persist.Types.SourceSpan
 import Language.Haskell.TH.Syntax (Lift)
 import Replace.Megaparsec (sepCap)
 import Text.Megaparsec hiding (Token)
@@ -38,7 +39,9 @@ import qualified Text.Megaparsec.Char.Lexer as L
 
 type Parser = Parsec Void String
 
--- | Source location: file and line/col information. This is half of a 'Span'.
+-- | Source location: file and line/col information. This is half of a 'SourceSpan'.
+--
+-- @since 2.16.0.0
 data SourceLoc = SourceLoc
     { locFile :: Text
     , locStartLine :: Int
@@ -46,6 +49,7 @@ data SourceLoc = SourceLoc
     }
     deriving (Show, Lift)
 
+-- @since 2.16.0.0
 data Token
     = DocComment Text
     | Comment Text
@@ -56,6 +60,9 @@ data Token
     | PText Text
     deriving (Eq, Ord, Show)
 
+-- | Converts a token into a Text representation for second-stage parsing or presentation to the user
+--
+-- @since 2.16.0.0
 tokenContent :: Token -> Text
 tokenContent = \case
     Comment s -> s
@@ -80,14 +87,6 @@ spaceConsumerN =
         (L.skipLineComment "--")
         empty
 
-escapedParen :: Parser Char
-escapedParen =
-    char '\\'
-        *> choice
-            [ char '('
-            , char ')'
-            ]
-
 contentChar :: Parser Char
 contentChar =
     choice
@@ -102,8 +101,12 @@ contentChar =
         , char '~'
         , char '-'
         , char ':'
-        , try escapedParen
-        , char '\\'
+        , do
+            backslash <- char '\\'
+            nextChar <- lookAhead anySingle
+            if nextChar == '(' || nextChar == ')'
+                then single nextChar
+                else pure backslash
         ]
 
 nonLineSpaceChar :: Parser Char
@@ -111,31 +114,21 @@ nonLineSpaceChar = choice [char ' ', char '\t']
 
 -- This is a replacement for `Text.Megaparsec.Char.Lexer.charLiteral`;
 -- it does nearly the same thing but additionally supports escaped parentheses.
+
 charLiteral :: Parser Char
 charLiteral = label "literal character" $ do
-    r <- lookAhead (count' 1 10 anySingle)
-    case lexChar r of
-        Just (c, r') -> c <$ skipCount (length r - length r') anySingle
-        Nothing -> unexpected (errorTokens r)
-  where
-    errorTokens ts = Tokens $
-        case NEL.nonEmpty ts of
-            Just nel -> NEL.head nel :| []
-            Nothing -> error "unreachable" -- ts is known to be non-empty
-    lexChar "" =
-        Nothing
-    lexChar ('\\' : '(' : rest) =
-        Just ('(', rest)
-    lexChar ('\\' : ')' : rest) =
-        Just (')', rest)
-    lexChar ('\\' : '\\' : rest) =
-        Just ('\\', rest)
-    lexChar ('\\' : '\'' : rest) =
-        Just ('\'', rest)
-    lexChar ('\\' : '\"' : rest) =
-        Just ('\"', rest)
-    lexChar (a : rest) =
-        Just (a, rest)
+    char1 <- anySingle
+    case char1 of
+        '\\' -> do
+            char2 <- anySingle
+            case char2 of
+                '(' -> pure '('
+                ')' -> pure ')'
+                '\\' -> pure '\\'
+                '\"' -> pure '\"'
+                '\'' -> pure '\''
+                _ -> unexpected (Tokens $ char2 :| [])
+        _ -> pure char1
 
 equality :: Parser Token
 equality = label "equality expression" $ do
@@ -144,12 +137,12 @@ equality = label "equality expression" $ do
         _ <- char '='
         rhs <-
             choice
-                [ try quotation'
-                , try sqlLiteral
-                , try parentheticalInner
+                [ quotation'
+                , sqlLiteral
+                , parentheticalInner
                 , some $ contentChar <|> char '(' <|> char ')'
                 ]
-        pure $ Equality (pack lhs) (pack rhs)
+        pure $ Equality (Text.pack lhs) (Text.pack rhs)
   where
     parentheticalInner = do
         str <- parenthetical'
@@ -176,7 +169,7 @@ sqlLiteral = label "SQL literal" $ do
 quotation :: Parser Token
 quotation = label "quotation" $ do
     str <- L.lexeme spaceConsumer quotation'
-    pure . Quotation $ pack str
+    pure . Quotation $ Text.pack str
 
 quotation' :: Parser String
 quotation' = char '"' *> manyTill charLiteral (char '"')
@@ -184,7 +177,7 @@ quotation' = char '"' *> manyTill charLiteral (char '"')
 parenthetical :: Parser Token
 parenthetical = label "parenthetical" $ do
     str <- L.lexeme spaceConsumer parenthetical'
-    pure . Parenthetical . pack . init . drop 1 $ str
+    pure . Parenthetical . Text.pack . init . drop 1 $ str
 
 parenthetical' :: Parser String
 parenthetical' = do
@@ -198,25 +191,26 @@ blockKey :: Parser Token
 blockKey = label "block key" $ do
     fl <- upperChar
     rl <- many alphaNumChar
-    pure . BlockKey . pack $ fl : rl
+    pure . BlockKey . Text.pack $ fl : rl
 
 ptext :: Parser Token
 ptext = label "plain token" $ do
     str <- L.lexeme spaceConsumer $ some contentChar
-    pure . PText . pack $ str
+    pure . PText . Text.pack $ str
 
 docComment :: Parser Token
 docComment = label "doc comment" $ do
     _ <- string "-- |" <* hspace
     str <- many (contentChar <|> nonLineSpaceChar)
-    pure . DocComment . pack $ str
+    pure . DocComment . Text.pack $ str
 
 comment :: Parser Token
 comment = label "comment" $ do
     _ <- (string "--" <|> string "#") <* hspace
     str <- many (contentChar <|> nonLineSpaceChar)
-    pure . Comment . pack $ str
+    pure . Comment . Text.pack $ str
 
+-- @since 2.16.0.0
 anyToken :: Parser Token
 anyToken =
     choice
@@ -233,10 +227,9 @@ data ParsedEntityDef = ParsedEntityDef
     , parsedEntityDefEntityName :: EntityNameHS
     , parsedEntityDefIsSum :: Bool
     , parsedEntityDefEntityAttributes :: [Attr]
-    , parsedEntityDefFieldAttributes :: [[Token]]
-    , parsedEntityDefFieldComments :: [Maybe Text]
+    , parsedEntityDefFieldAttributes :: [([Token], Maybe Text)]
     , parsedEntityDefExtras :: M.Map Text [ExtraLine]
-    , parsedEntityDefSpan :: Maybe Span
+    , parsedEntityDefSourceSpan :: Maybe SourceSpan
     }
     deriving (Show)
 
@@ -304,6 +297,9 @@ memberEndPos :: Member -> SourcePos
 memberEndPos (MemberBlockAttr fs) = blockAttrPos fs
 memberEndPos (MemberExtraBlock ex) = memberEndPos . NEL.last . extraBlockMembers $ ex
 
+-- | Represents an entity member as a list of BlockAttrs
+--
+-- @since 2.16.0.0
 memberBlockAttrs :: Member -> [BlockAttr]
 memberBlockAttrs (MemberBlockAttr fs) = [fs]
 memberBlockAttrs (MemberExtraBlock ex) = foldMap memberBlockAttrs . extraBlockMembers $ ex
@@ -477,7 +473,9 @@ applyDocToMember dc (MemberExtraBlock ex) =
         [] -> error "unreachable" -- appliedList is known to be non-empty
 
 parseEntities
-    :: Text -> String -> Either (ParseErrorBundle String Void) [EntityBlock]
+    :: Text
+    -> String
+    -> Either (ParseErrorBundle String Void) [EntityBlock]
 parseEntities fp s = do
     entities <- runParser entitiesFromDocument (unpack fp) s
     docComments <- runParser docCommentsFromDocument (unpack fp) s
@@ -491,9 +489,8 @@ toParsedEntityDef mSourceLoc eb =
         , parsedEntityDefIsSum = isSum
         , parsedEntityDefEntityAttributes = entityAttributes
         , parsedEntityDefFieldAttributes = parsedFieldAttributes
-        , parsedEntityDefFieldComments = parsedFieldComments
         , parsedEntityDefExtras = extras
-        , parsedEntityDefSpan = mSpan
+        , parsedEntityDefSourceSpan = mSpan
         }
   where
     comments =
@@ -506,10 +503,8 @@ toParsedEntityDef mSourceLoc eb =
     isSum = entityHeaderSum . entityBlockEntityHeader $ eb
     entityNameHS = EntityNameHS . entityHeaderTableName . entityBlockEntityHeader $ eb
 
-    parsedFieldAttributes = fmap blockAttrTokens (entityBlockBlockAttrs eb)
-    parsedFieldComments =
-        fmap docCommentBlockText
-            <$> fmap blockAttrDocCommentBlock (entityBlockBlockAttrs eb)
+    attributePair a = (blockAttrTokens a, docCommentBlockText <$> blockAttrDocCommentBlock a)
+    parsedFieldAttributes = fmap attributePair (entityBlockBlockAttrs eb)
 
     extras = extraBlocksAsMap (entityBlockExtraBlocks eb)
     filepath = maybe "" locFile mSourceLoc
@@ -517,7 +512,7 @@ toParsedEntityDef mSourceLoc eb =
     relativeStartCol = maybe 0 locStartCol mSourceLoc
     mSpan =
         Just
-            Span
+            SourceSpan
                 { spanFile = filepath
                 , spanStartLine =
                     relativeStartLine + (unPos . sourceLine $ entityBlockHeaderPos eb)
@@ -529,7 +524,7 @@ toParsedEntityDef mSourceLoc eb =
 
 parseSource :: Maybe SourceLoc -> Text -> [ParsedEntityDef]
 parseSource mSourceLoc source =
-    case parseEntities filepath (unpack source) of
+    case parseEntities filepath (Text.unpack source) of
         Right blocks -> toParsedEntityDef mSourceLoc <$> blocks
         Left peb -> error $ errorBundlePretty peb
   where
