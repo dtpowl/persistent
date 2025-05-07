@@ -1,5 +1,4 @@
 {-# LANGUAGE DeriveLift #-}
-{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE PatternGuards #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE RecordWildCards #-}
@@ -51,6 +50,7 @@ import Prelude hiding (lines)
 import Control.Applicative (Alternative ((<|>)))
 import Control.Monad
 import Data.Char (isDigit, isLower, isSpace, isUpper, toLower)
+import Data.Foldable (toList)
 import Data.List (find, foldl')
 import Data.List.NonEmpty (NonEmpty (..))
 import qualified Data.List.NonEmpty as NEL
@@ -309,10 +309,10 @@ data UnboundEntityDef
     -- the field?" yet, so we defer those to the Template Haskell execution.
     --
     -- @since 2.13.0.0
-    , unboundEntityDefSpan :: Maybe Span
+    , unboundEntityDefSourceSpan :: Maybe SourceSpan
     -- ^ The source code span of this entity in the models file.
     --
-    -- @since 2.15.0.0
+    -- @since 2.16.0.0
     }
     deriving (Eq, Ord, Show, Lift)
 
@@ -336,7 +336,7 @@ unbindEntityDef ed =
             ed
         , unboundEntityFields =
             map unbindFieldDef (entityFields ed)
-        , unboundEntityDefSpan = entitySpan ed
+        , unboundEntityDefSourceSpan = entitySourceSpan ed
         }
 
 -- | Returns the @['UnboundFieldDef']@ for an 'UnboundEntityDef'. This returns
@@ -547,7 +547,7 @@ mkUnboundEntityDef ps parsedEntDef =
                     DefaultKey (FieldNameDB $ psIdName ps)
         , unboundEntityFields =
             cols
-        , unboundEntityDefSpan = parsedEntityDefSpan parsedEntDef
+        , unboundEntityDefSourceSpan = parsedEntityDefSourceSpan parsedEntDef
         , unboundEntityDef =
             EntityDef
                 { entityHaskell = entNameHS
@@ -571,7 +571,7 @@ mkUnboundEntityDef ps parsedEntDef =
                     case parsedEntityDefComments parsedEntDef of
                         [] -> Nothing
                         comments -> Just (T.unlines comments)
-                , entitySpan = parsedEntityDefSpan parsedEntDef
+                , entitySourceSpan = parsedEntityDefSourceSpan parsedEntDef
                 }
         }
   where
@@ -581,19 +581,11 @@ mkUnboundEntityDef ps parsedEntDef =
     attribs =
         parsedEntityDefFieldAttributes parsedEntDef
 
-    fieldComments =
-        parsedEntityDefFieldComments parsedEntDef
-
     cols :: [UnboundFieldDef]
-    cols = foldMap (f . commentedField ps) (zip attribs fieldComments)
-      where
-        f = \case
-            Just unb -> [unb]
-            _ -> []
+    cols = foldMap (toList . commentedField ps) attribs
 
     textAttribs :: [[Text]]
-    textAttribs =
-        fmap tokenContent <$> attribs
+    textAttribs = fmap tokenContent . fst <$> attribs
 
     entityConstraintDefs =
         foldMap
@@ -612,6 +604,14 @@ mkUnboundEntityDef ps parsedEntDef =
             SetOnce a -> Just a
             NotSet -> Nothing
 
+    commentedField
+        :: PersistSettings
+        -> ([Token], Maybe Text)
+        -> Maybe UnboundFieldDef
+    commentedField ps (tokens, mCommentText) = do
+        unb <- takeColsEx ps (tokenContent <$> tokens)
+        pure $ unb{unboundFieldComments = mCommentText}
+
     autoIdField :: FieldDef
     autoIdField =
         mkAutoIdField ps entNameHS idSqlType
@@ -619,12 +619,6 @@ mkUnboundEntityDef ps parsedEntDef =
     idSqlType :: SqlType
     idSqlType =
         maybe SqlInt64 (const $ SqlOther "Primary Key") primaryComposite
-
-commentedField
-    :: PersistSettings -> ([Token], Maybe Text) -> Maybe UnboundFieldDef
-commentedField ps (tokens, mCommentText) = do
-    unb <- takeColsEx ps (tokenContent <$> tokens)
-    pure $ unb{unboundFieldComments = mCommentText}
 
 defaultIdName :: PersistSettings -> FieldNameDB
 defaultIdName = FieldNameDB . psIdName
