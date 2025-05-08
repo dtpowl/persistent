@@ -22,6 +22,8 @@ module Database.Persist.Quasi.Internal
     , sourceLocFromTHLoc
     , parseFieldType
     , takeColsEx
+    , CumulativeParseResult (..)
+    , renderErrors
 
       -- * UnboundEntityDef
     , UnboundEntityDef (..)
@@ -220,11 +222,14 @@ sourceLocFromTHLoc Loc{loc_filename = filename, loc_start = start} =
         }
 
 -- | Parses a quasi-quoted syntax into a list of entity definitions.
-parse :: PersistSettings -> [(Maybe SourceLoc, Text)] -> [UnboundEntityDef]
-parse ps = foldMap $ uncurry parseChunk
+parse
+  :: PersistSettings
+  -> [(Maybe SourceLoc, Text)]
+  -> CumulativeParseResult [UnboundEntityDef]
+parse ps inputs = foldMap toCumulativeParseResult $ map (uncurry parseChunk) inputs
   where
-    parseChunk :: Maybe SourceLoc -> Text -> [UnboundEntityDef]
-    parseChunk mSourceLoc source = fmap (mkUnboundEntityDef ps) (parseSource mSourceLoc source)
+    parseChunk :: Maybe SourceLoc -> Text -> ParseResult [UnboundEntityDef]
+    parseChunk mSourceLoc source = (fmap . fmap) (mkUnboundEntityDef ps) (parseSource mSourceLoc source)
 
 entityNamesFromParsedDef
     :: PersistSettings -> ParsedEntityDef -> (EntityNameHS, EntityNameDB)
@@ -608,8 +613,8 @@ mkUnboundEntityDef ps parsedEntDef =
         :: PersistSettings
         -> ([Token], Maybe Text)
         -> Maybe UnboundFieldDef
-    commentedField ps (tokens, mCommentText) = do
-        unb <- takeColsEx ps (tokenContent <$> tokens)
+    commentedField s (tokens, mCommentText) = do
+        unb <- takeColsEx s (tokenContent <$> tokens)
         pure $ unb{unboundFieldComments = mCommentText}
 
     autoIdField :: FieldDef

@@ -2,6 +2,8 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TupleSections #-}
+{-# LANGUAGE TypeSynonymInstances #-}
+{-# LANGUAGE FlexibleInstances #-}
 
 module Database.Persist.Quasi.Internal.ModelParser
     ( SourceLoc (..)
@@ -18,14 +20,18 @@ module Database.Persist.Quasi.Internal.ModelParser
     , parsedEntityDefSpan
     , parseSource
     , memberBlockAttrs
+    , ParseResult
+    , CumulativeParseResult (..)
+    , toCumulativeParseResult
+    , renderErrors
     ) where
 
 import Control.Monad (mzero)
+import Data.List (intercalate)
 import Data.List.NonEmpty (NonEmpty (..))
 import qualified Data.List.NonEmpty as NEL
 import qualified Data.Map as M
 import Data.Maybe
-import qualified Data.Set as S
 import Data.Text (Text)
 import qualified Data.Text as Text
 import Data.Void
@@ -37,6 +43,45 @@ import Text.Megaparsec.Char
 import qualified Text.Megaparsec.Char.Lexer as L
 
 type Parser = Parsec Void String
+
+type ParseResult a = Either (ParseErrorBundle String Void) a
+
+data CumulativeParseResult a = CumulativeParseResult {
+  cumulativeErrors :: [ParseErrorBundle String Void],
+  cumulativeData :: a
+  }
+
+toCumulativeParseResult
+  :: (Monoid a) =>
+  ParseResult a ->
+  CumulativeParseResult a
+
+toCumulativeParseResult (Left peb) =
+  CumulativeParseResult { cumulativeErrors = [peb]
+                        , cumulativeData = mempty
+                        }
+
+toCumulativeParseResult (Right res) =
+  CumulativeParseResult { cumulativeErrors = []
+                        , cumulativeData = res
+                        }
+
+
+renderErrors :: CumulativeParseResult a -> Maybe String
+renderErrors cpr =
+  case cumulativeErrors cpr of
+    [] -> Nothing
+    pebs -> Just $ intercalate "\n" $ fmap errorBundlePretty pebs
+
+instance (Semigroup a) => Semigroup (CumulativeParseResult a) where
+  (<>) l r = CumulativeParseResult { cumulativeErrors = cumulativeErrors l ++ cumulativeErrors r
+                                   , cumulativeData = cumulativeData l <> cumulativeData r
+                                   }
+
+instance (Monoid a) => Monoid (CumulativeParseResult a) where
+  mempty = CumulativeParseResult { cumulativeErrors = mempty
+                                 , cumulativeData = mempty
+                                 }
 
 -- | Source location: file and line/col information. This is half of a 'SourceSpan'.
 --
@@ -242,14 +287,14 @@ flatBlock sc p = do
 
 docCommentBlock :: Parser (Maybe DocCommentBlock)
 docCommentBlock = do
-    lines <-
+    ls <-
         many $ flatBlock indentationConsumer $ choice [docCommentLine, commentLine]
-    if not (null (filterLines lines))
+    if not (null (filterLines ls))
         then
             pure $
                 Just
                     DocCommentBlock
-                        { docCommentBlockLines = tokenContent <$> filterLines lines
+                        { docCommentBlockLines = tokenContent <$> filterLines ls
                         }
         else pure Nothing
   where
@@ -474,7 +519,7 @@ entitiesFromDocument = many entityBlock <* hidden eof
 parseEntities
     :: Text
     -> String
-    -> Either (ParseErrorBundle String Void) [EntityBlock]
+    -> ParseResult [EntityBlock]
 parseEntities fp = runParser entitiesFromDocument $ Text.unpack fp
 
 toParsedEntityDef :: Maybe SourceLoc -> EntityBlock -> ParsedEntityDef
@@ -518,10 +563,10 @@ toParsedEntityDef mSourceLoc eb =
                 , spanEndCol = unPos . sourceColumn $ entityBlockEndPos eb
                 }
 
-parseSource :: Maybe SourceLoc -> Text -> [ParsedEntityDef]
+parseSource :: Maybe SourceLoc -> Text -> ParseResult [ParsedEntityDef]
 parseSource mSourceLoc source =
     case parseEntities filepath (Text.unpack source) of
-        Right blocks -> toParsedEntityDef mSourceLoc <$> blocks
-        Left peb -> error $ errorBundlePretty peb
+        Right blocks -> Right $ toParsedEntityDef mSourceLoc <$> blocks
+        Left peb -> Left peb
   where
     filepath = maybe "" locFile mSourceLoc

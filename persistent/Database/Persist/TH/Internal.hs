@@ -282,7 +282,11 @@ embedEntityDefsMap existingEnts rawEnts =
 --
 -- @since 2.5.3
 parseReferences :: PersistSettings -> [(Maybe SourceLoc, Text)] -> Q Exp
-parseReferences ps s = lift $ parse ps s
+parseReferences ps s = do
+  let cpr = parse ps s
+  case renderErrors cpr of
+    Nothing -> lift $ cumulativeData cpr
+    Just errorMessage -> fail errorMessage
 
 preprocessUnboundDefs
     :: [EntityDef]

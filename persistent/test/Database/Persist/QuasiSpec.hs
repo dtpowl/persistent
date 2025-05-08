@@ -28,10 +28,18 @@ import Database.Persist.Quasi.Internal.ModelParser
 import Text.Megaparsec (errorBundlePretty, runParser, some)
 
 defs :: T.Text -> [UnboundEntityDef]
-defs t = parse lowerCaseSettings [(Nothing, t)]
+defs t = case renderErrors cpr of
+    Nothing -> cumulativeData cpr
+    Just msg -> error msg
+  where
+    cpr = parse lowerCaseSettings [(Nothing, t)]
 
 defsSnake :: T.Text -> [UnboundEntityDef]
-defsSnake t = parse (setPsUseSnakeCaseForeignKeys lowerCaseSettings) [(Nothing, t)]
+defsSnake t = case renderErrors cpr of
+  Nothing -> cumulativeData cpr
+  Just msg -> error msg
+  where
+    cpr = parse (setPsUseSnakeCaseForeignKeys lowerCaseSettings) [(Nothing, t)]
 
 spec :: Spec
 spec = describe "Quasi" $ do
@@ -626,8 +634,10 @@ Notification
                 let
                     flippedFK (EntityNameHS entName) (ConstraintNameHS conName) =
                         conName <> entName
-                    [_user, notification] =
-                        parse (setPsToFKName flippedFK lowerCaseSettings) [(Nothing, validDefinitions)]
+                    cpr = parse (setPsToFKName flippedFK lowerCaseSettings) [(Nothing, validDefinitions)]
+                    [_user, notification] = case renderErrors cpr of
+                      Nothing -> cumulativeData cpr
+                      Just msg -> error msg
                     [notificationForeignDef] =
                         unboundForeignDef <$> unboundForeignDefs notification
                 foreignConstraintNameDBName notificationForeignDef
