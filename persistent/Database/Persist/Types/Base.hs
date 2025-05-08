@@ -157,14 +157,14 @@ data EntityDef = EntityDef
     -- ^ Optional comments on the entity.
     --
     -- @since 2.10.0
-    , entitySourceSpan :: !(Maybe SourceSpan)
+    , entitySpan :: !(Maybe SourceSpan)
     -- ^ Source code span occupied by this entity. May be absent if it is not
     -- known.
     --
     -- Note that until a refactor is completed, these cover the entire
     -- persistent parser input rather than the particular entity in question.
     --
-    -- @since 2.16.0.0
+    -- @since 2.15.0.0
     }
     deriving (Show, Eq, Read, Ord, Lift)
 

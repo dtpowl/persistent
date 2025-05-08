@@ -15,7 +15,7 @@ module Database.Persist.Quasi.Internal.ModelParser
     , parsedEntityDefEntityAttributes
     , parsedEntityDefFieldAttributes
     , parsedEntityDefExtras
-    , parsedEntityDefSourceSpan
+    , parsedEntityDefSpan
     , parseSource
     , memberBlockAttrs
     ) where
@@ -282,7 +282,7 @@ data ParsedEntityDef = ParsedEntityDef
     , parsedEntityDefEntityAttributes :: [Attr]
     , parsedEntityDefFieldAttributes :: [([Token], Maybe Text)]
     , parsedEntityDefExtras :: M.Map Text [ExtraLine]
-    , parsedEntityDefSourceSpan :: Maybe SourceSpan
+    , parsedEntityDefSpan :: Maybe SourceSpan
     }
     deriving (Show)
 
@@ -478,7 +478,7 @@ toParsedEntityDef mSourceLoc eb =
         , parsedEntityDefEntityAttributes = entityAttributes
         , parsedEntityDefFieldAttributes = parsedFieldAttributes
         , parsedEntityDefExtras = extras
-        , parsedEntityDefSourceSpan = mSpan
+        , parsedEntityDefSpan = mSpan
         }
   where
     comments =
