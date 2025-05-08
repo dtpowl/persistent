@@ -336,7 +336,7 @@ spec = describe "THSpec" $ do
                     }
         describe "entityDef" $ do
             it "correct position" $ do
-                let Just theSpan = entitySourceSpan simpleCascadeDef
+                let Just theSpan = entitySpan simpleCascadeDef
                 theSpan `shouldSatisfy` ((> locStartLine personDefBeforeLoc) . spanStartLine)
                 theSpan `shouldSatisfy` (\s -> spanStartLine s < spanEndLine s)
                 theSpan `shouldSatisfy` ((< locStartLine personDefAfterLoc) . spanEndLine)
@@ -389,7 +389,7 @@ spec = describe "THSpec" $ do
                             -- We cannot test this is a precise value without
                             -- being really fragile, but we have another test to
                             -- verify the line is in range.
-                            , entitySourceSpan = entitySourceSpan simpleCascadeDef
+                            , entitySpan = entitySpan simpleCascadeDef
                             }
         it "has the cascade on the field def" $ do
             fieldCascade subject `shouldBe` expected

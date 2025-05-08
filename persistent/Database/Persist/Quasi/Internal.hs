@@ -309,10 +309,10 @@ data UnboundEntityDef
     -- the field?" yet, so we defer those to the Template Haskell execution.
     --
     -- @since 2.13.0.0
-    , unboundEntityDefSourceSpan :: Maybe SourceSpan
+    , unboundEntityDefSpan :: Maybe SourceSpan
     -- ^ The source code span of this entity in the models file.
     --
-    -- @since 2.16.0.0
+    -- @since 2.15.0.0
     }
     deriving (Eq, Ord, Show, Lift)
 
@@ -336,7 +336,7 @@ unbindEntityDef ed =
             ed
         , unboundEntityFields =
             map unbindFieldDef (entityFields ed)
-        , unboundEntityDefSourceSpan = entitySourceSpan ed
+        , unboundEntityDefSpan = entitySpan ed
         }
 
 -- | Returns the @['UnboundFieldDef']@ for an 'UnboundEntityDef'. This returns
@@ -547,7 +547,7 @@ mkUnboundEntityDef ps parsedEntDef =
                     DefaultKey (FieldNameDB $ psIdName ps)
         , unboundEntityFields =
             cols
-        , unboundEntityDefSourceSpan = parsedEntityDefSourceSpan parsedEntDef
+        , unboundEntityDefSpan = parsedEntityDefSpan parsedEntDef
         , unboundEntityDef =
             EntityDef
                 { entityHaskell = entNameHS
@@ -571,7 +571,7 @@ mkUnboundEntityDef ps parsedEntDef =
                     case parsedEntityDefComments parsedEntDef of
                         [] -> Nothing
                         comments -> Just (T.unlines comments)
-                , entitySourceSpan = parsedEntityDefSourceSpan parsedEntDef
+                , entitySpan = parsedEntityDefSpan parsedEntDef
                 }
         }
   where

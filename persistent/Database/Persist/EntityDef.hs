@@ -19,7 +19,7 @@ module Database.Persist.EntityDef
     , getEntityKeyFields
     , getEntityComments
     , getEntityExtra
-    , getEntitySourceSpan
+    , getEntitySpan
     , isEntitySum
     , entityPrimary
     , entitiesPrimary
@@ -209,12 +209,12 @@ overEntityFields
 overEntityFields f ed =
     setEntityFields (f (getEntityFieldsDatabase ed)) ed
 
--- | Gets the 'SourceSpan' of the definition of the entity.
+-- | Gets the 'Source' of the definition of the entity.
 --
 -- Note that as of this writing the span covers the entire file or quasiquote
 -- where the item is defined due to parsing limitations. This may be changed in
 -- a future release to be more accurate.
 --
--- @since 2.16.0.0
-getEntitySourceSpan :: EntityDef -> Maybe SourceSpan
-getEntitySourceSpan = entitySourceSpan
+-- @since 2.15.0.0
+getEntitySpan :: EntityDef -> Maybe SourceSpan
+getEntitySpan = entitySpan
