@@ -109,6 +109,13 @@ contentChar =
                 else pure backslash
         ]
 
+nonSpaceChar :: Parser Char
+nonSpaceChar = choice [ alphaNumChar
+                      , markChar
+                      , punctuationChar
+                      , symbolChar
+                      ]
+
 nonLineSpaceChar :: Parser Char
 nonLineSpaceChar = choice [char ' ', char '\t']
 
@@ -205,14 +212,14 @@ ptext = label "plain token" $ do
 
 docComment :: Parser Token
 docComment = hidden $ do
-    _ <- string "-- |" <* hspace
-    str <- many (contentChar <|> nonLineSpaceChar)
+    _ <- hspace *> string "-- |" <* hspace
+    str <- many (nonSpaceChar <|> nonLineSpaceChar)
     pure . DocComment . Text.pack $ str
 
 comment :: Parser Token
 comment = hidden $ do
-    _ <- (string "--" <|> string "#") <* hspace
-    str <- many (contentChar <|> nonLineSpaceChar)
+    _ <- hspace *> (string "--" <|> string "#") <* hspace
+    str <- many (nonSpaceChar <|> nonLineSpaceChar)
     pure . Comment . Text.pack $ str
 
 indentLevelBacktrack :: Parser () -> Parser Pos
@@ -429,12 +436,13 @@ extraBlockHeader = do
             , extraBlockHeaderDocCommentBlock = dcb
             }
 
+
 blockAttr :: Parser Member
 blockAttr = do
     ref <- indentLevelBacktrack indentationConsumer
     dcb <- docCommentBlock
     pos <- getSourcePos
-    line <- indented indentationConsumer ref $ some anyNonCommentToken <* eol
+    line <- indented indentationConsumer ref $ some anyNonCommentToken <* endl
     pure $
         MemberBlockAttr
             BlockAttr
@@ -442,6 +450,8 @@ blockAttr = do
                 , blockAttrTokens = line
                 , blockAttrPos = pos
                 }
+      where
+        endl = eof <|> eol *> pure ()
 
 member :: Parser Member
 member = try extraBlock <|> blockAttr
