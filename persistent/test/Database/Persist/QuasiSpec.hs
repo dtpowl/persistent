@@ -130,6 +130,14 @@ spec = describe "Quasi" $ do
                     ( "1:9:\n  |\n1 | \"foo bar\n  |         ^\nunexpected end of input\nexpecting '\"' or literal character\n"
                     )
 
+        it "handles commas in tokens" $
+            tokenize "x=COALESCE(left,right)  \"baz\""
+                `shouldBe` Right
+                    ( [ Equality "x" "COALESCE(left,right)"
+                      , Quotation "baz"
+                      ]
+                    )
+
         it "handles quotes mid-token" $
             tokenize "x=\"foo bar\"  \"baz\""
                 `shouldBe` Right
@@ -138,7 +146,7 @@ spec = describe "Quasi" $ do
                       ]
                     )
 
-        it "handles escaped quote mid-token" $
+        it "handles escaped quotes mid-token" $
             tokenize "x=\\\"foo bar\"  \"baz\""
                 `shouldBe` Right
                     ( [ Equality "x" "\\\"foo"
