@@ -219,26 +219,23 @@ indentLevelBacktrack sc = lookAhead $ do
     _ <- sc
     L.indentLevel
 
-indented :: Parser () -> Pos -> (Parser a -> Parser b) -> Parser a -> Parser b
-indented sc ref f p =
-    f . try $ do
+indented :: Parser () -> Pos -> Parser a -> Parser a
+indented sc ref p =
+    try $ do
         ind <- indentLevelBacktrack sc
         if ref == ind
             then sc *> p
             else mzero
 
-indented' :: Parser () -> Pos -> Parser a -> Parser a
-indented' sc ref = indented sc ref id
-
-flatBlock :: Parser () -> (Parser a -> Parser b) -> Parser a -> Parser b
-flatBlock sc f p = do
+flatBlock :: Parser () -> Parser a -> Parser a
+flatBlock sc p = do
     ref <- indentLevelBacktrack sc
-    indented sc ref f p
+    indented sc ref p
 
 docCommentBlock :: Parser (Maybe DocCommentBlock)
 docCommentBlock = do
     lines <-
-        flatBlock indentationConsumer many $ choice [docCommentLine, commentLine]
+        many $ flatBlock indentationConsumer $ choice [docCommentLine, commentLine]
     if not (null (filterLines lines))
         then
             pure $
@@ -436,7 +433,7 @@ blockAttr = do
     ref <- indentLevelBacktrack indentationConsumer
     dcb <- docCommentBlock
     pos <- getSourcePos
-    line <- indented' indentationConsumer ref $ some anyNonCommentToken
+    line <- indented indentationConsumer ref $ some anyNonCommentToken
     pure $
         MemberBlockAttr
             BlockAttr
