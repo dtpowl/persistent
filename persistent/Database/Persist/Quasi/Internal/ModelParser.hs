@@ -100,6 +100,7 @@ contentChar =
         , char '~'
         , char '-'
         , char ':'
+        , char ','
         , do
             backslash <- char '\\'
             nextChar <- lookAhead anySingle
