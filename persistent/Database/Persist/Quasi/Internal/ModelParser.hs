@@ -434,7 +434,7 @@ blockAttr = do
     ref <- indentLevelBacktrack indentationConsumer
     dcb <- docCommentBlock
     pos <- getSourcePos
-    line <- indented indentationConsumer ref $ some anyNonCommentToken
+    line <- indented indentationConsumer ref $ some anyNonCommentToken <* eol
     pure $
         MemberBlockAttr
             BlockAttr
