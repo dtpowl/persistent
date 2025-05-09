@@ -409,6 +409,12 @@ Notification
             entityComments (unboundEntityDef car) `shouldBe` Just "This is a Car\n"
             entityComments (unboundEntityDef vehicle) `shouldBe` Nothing
 
+        it "treats tabs as spaces" $ do
+          let
+            str = T.pack "User\n\tId Text\n\tname Text\n\tage Int"
+            [user] = defs str
+          getUnboundEntityNameHS user `shouldBe` EntityNameHS "User"
+
         it "should error on malformed input, unterminated parens" $ do
             let
                 definitions =

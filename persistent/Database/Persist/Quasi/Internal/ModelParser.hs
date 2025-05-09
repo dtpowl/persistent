@@ -52,6 +52,38 @@ data CumulativeParseResult a = CumulativeParseResult
     , cumulativeData :: a
     }
 
+runConfiguredParser
+  :: Parser a
+  -> String
+  -> String
+  -> ParseResult a
+runConfiguredParser parser fp s = do
+  let (_s, parseResult) = runParser' parser initialState
+  parseResult
+  where
+    initialSourcePos =
+        SourcePos
+            { sourceName = fp
+            , sourceLine = pos1
+            , sourceColumn = pos1
+            }
+    initialPosState =
+        PosState
+            { pstateInput = s
+            , pstateOffset = 0
+            , pstateSourcePos = initialSourcePos
+            , -- for legacy compatibility, we treat each tab as a single unit of whitespace
+              pstateTabWidth = pos1
+            , pstateLinePrefix = ""
+            }
+    initialState =
+        State
+            { stateInput = s
+            , stateOffset = 0
+            , statePosState = initialPosState
+            , stateParseErrors = []
+            }
+
 -- | Populates a CumulativeParseResult with a single error or datum
 -- @since 2.16.0.0
 toCumulativeParseResult
@@ -544,8 +576,8 @@ parseEntities
     -> String
     -> ParseResult [EntityBlock]
 parseEntities fp s = do
-    entities <- runParser entitiesFromDocument (Text.unpack fp) s
-    docComments <- runParser docCommentsFromDocument (Text.unpack fp) s
+    entities <- runConfiguredParser entitiesFromDocument (Text.unpack fp) s
+    docComments <- runConfiguredParser docCommentsFromDocument (Text.unpack fp) s
     pure $ associateDocComments docComments entities
 
 toParsedEntityDef :: Maybe SourceLoc -> EntityBlock -> ParsedEntityDef
