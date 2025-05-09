@@ -20,7 +20,6 @@ module Database.Persist.Quasi.Internal.ModelParser
     , memberBlockAttrs
     ) where
 
-import Prelude hiding (lines, unlines)
 import Data.List.NonEmpty (NonEmpty (..))
 import qualified Data.List.NonEmpty as NEL
 import qualified Data.Map as M
@@ -109,6 +108,13 @@ contentChar =
                 then single nextChar
                 else pure backslash
         ]
+
+nonSpaceChar :: Parser Char
+nonSpaceChar = choice [ alphaNumChar
+                      , markChar
+                      , punctuationChar
+                      , symbolChar
+                      ]
 
 nonLineSpaceChar :: Parser Char
 nonLineSpaceChar = choice [char ' ', char '\t']
@@ -201,14 +207,14 @@ ptext = label "plain token" $ do
 
 docComment :: Parser Token
 docComment = label "doc comment" $ do
-    _ <- string "-- |" <* hspace
-    str <- many (contentChar <|> nonLineSpaceChar)
+    _ <- hspace *> string "-- |" <* hspace
+    str <- many (nonSpaceChar <|> nonLineSpaceChar)
     pure . DocComment . Text.pack $ str
 
 comment :: Parser Token
 comment = label "comment" $ do
-    _ <- (string "--" <|> string "#") <* hspace
-    str <- many (contentChar <|> nonLineSpaceChar)
+    _ <- hspace *> (string "--" <|> string "#") <* hspace
+    str <- many (nonSpaceChar <|> nonLineSpaceChar)
     pure . Comment . Text.pack $ str
 
 -- @since 2.16.0.0
@@ -426,7 +432,7 @@ docCommentsFromDocument =
         Left _ : xs -> extractFrom xs
 
 docCommentBlockText :: DocCommentBlock -> Text
-docCommentBlockText dcb = unlines $ docCommentBlockLines dcb
+docCommentBlockText dcb = Text.unlines $ docCommentBlockLines dcb
 
 associateDocComments :: [DocCommentBlock] -> [EntityBlock] -> [EntityBlock]
 associateDocComments _ [] = []
@@ -478,8 +484,8 @@ parseEntities
     -> String
     -> Either (ParseErrorBundle String Void) [EntityBlock]
 parseEntities fp s = do
-    entities <- runParser entitiesFromDocument (unpack fp) s
-    docComments <- runParser docCommentsFromDocument (unpack fp) s
+    entities <- runParser entitiesFromDocument (Text.unpack fp) s
+    docComments <- runParser docCommentsFromDocument (Text.unpack fp) s
     pure $ associateDocComments docComments entities
 
 toParsedEntityDef :: Maybe SourceLoc -> EntityBlock -> ParsedEntityDef
