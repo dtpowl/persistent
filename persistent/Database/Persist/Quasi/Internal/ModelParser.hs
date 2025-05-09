@@ -386,7 +386,7 @@ entityHeader :: Parser EntityHeader
 entityHeader = do
     pos <- getSourcePos
     plus <- optional (char '+')
-    en <- L.lexeme spaceConsumer blockKey
+    en <- hspace *> L.lexeme spaceConsumer blockKey
     rest <- L.lexeme spaceConsumer (many anyToken)
     pure
         EntityHeader
