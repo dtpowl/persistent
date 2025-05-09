@@ -94,7 +94,9 @@ spec = describe "Quasi" $ do
 
     describe "tokenization" $ do
         let
-            tokenize = runParser (some anyToken) ""
+            tokenize s = do
+              (d, c) <- runConfiguredParser [] (some anyToken) "" s
+              pure d
         it "handles normal words" $
             tokenize "foo   bar  baz"
                 `shouldBe` Right

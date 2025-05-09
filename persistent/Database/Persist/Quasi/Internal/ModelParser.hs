@@ -24,6 +24,7 @@ module Database.Persist.Quasi.Internal.ModelParser
     , CumulativeParseResult (..)
     , toCumulativeParseResult
     , renderErrors
+    , runConfiguredParser
     ) where
 
 import Data.List (intercalate)
@@ -42,10 +43,54 @@ import Text.Megaparsec hiding (Token)
 import Text.Megaparsec.Char
 import qualified Text.Megaparsec.Char.Lexer as L
 
-type Parser = Parsec Void String
+import Control.Monad.Trans.State
 
+type CommentAcc = [String]
+type Parser a =
+    StateT
+        CommentAcc
+        (ParsecT Void String (Either (ParseErrorBundle String Void)))
+        a
+type InternalParseResult a = Either (ParseErrorBundle String Void) (a, CommentAcc)
 type ParseResult a = Either (ParseErrorBundle String Void) a
 
+-- | Run a parser using a provided CommentAcc
+-- @since 2.16.0.0
+runConfiguredParser
+  :: CommentAcc
+  -> Parser a
+  -> String
+  -> String
+  -> InternalParseResult a
+runConfiguredParser acc parser fp s = do
+  (_internalState, parseResult) <- runParserT' (runStateT parser acc) initialInternalState
+  parseResult
+  where
+    initialSourcePos =
+        SourcePos
+            { sourceName = fp
+            , sourceLine = pos1
+            , sourceColumn = pos1
+            }
+    initialPosState =
+        PosState
+            { pstateInput = s
+            , pstateOffset = 0
+            , pstateSourcePos = initialSourcePos
+            , -- for legacy compatibility, we treat each tab as a single unit of whitespace
+              pstateTabWidth = pos1
+            , pstateLinePrefix = ""
+            }
+    initialInternalState =
+        State
+            { stateInput = s
+            , stateOffset = 0
+            , statePosState = initialPosState
+            , stateParseErrors = []
+            }
+
+
+--------
 -- @since 2.16.0.0
 data CumulativeParseResult a = CumulativeParseResult
     { cumulativeErrors :: [ParseErrorBundle String Void]
@@ -125,18 +170,27 @@ tokenContent = \case
     PText s -> s
     BlockKey s -> s
 
+skipLineComment :: Parser ()
+skipLineComment = do
+  _ <- hspace *> (string "--" <|> string "#") <* hspace
+  content <- many (nonSpaceChar <|> nonLineSpaceChar)
+  _ <- eol
+  state <- get
+  put $ state ++ [content]
+  pure ()
+
 spaceConsumer :: Parser ()
 spaceConsumer =
     L.space
         hspace1
-        (L.skipLineComment "--")
+        skipLineComment
         empty
 
 spaceConsumerN :: Parser ()
 spaceConsumerN =
     L.space
         space1
-        (L.skipLineComment "--")
+        skipLineComment
         empty
 
 contentChar :: Parser Char
@@ -544,8 +598,8 @@ parseEntities
     -> String
     -> ParseResult [EntityBlock]
 parseEntities fp s = do
-    entities <- runParser entitiesFromDocument (Text.unpack fp) s
-    docComments <- runParser docCommentsFromDocument (Text.unpack fp) s
+    (entities, comments) <- runConfiguredParser [] entitiesFromDocument (Text.unpack fp) s
+    (docComments, _) <- runConfiguredParser [] docCommentsFromDocument (Text.unpack fp) s
     pure $ associateDocComments docComments entities
 
 toParsedEntityDef :: Maybe SourceLoc -> EntityBlock -> ParsedEntityDef
@@ -592,7 +646,7 @@ toParsedEntityDef mSourceLoc eb =
 parseSource :: Maybe SourceLoc -> Text -> ParseResult [ParsedEntityDef]
 parseSource mSourceLoc source =
     case parseEntities filepath (Text.unpack source) of
-        Right blocks -> Right $ toParsedEntityDef mSourceLoc <$> blocks
+        Right blocks -> Right (toParsedEntityDef mSourceLoc <$> blocks)
         Left peb -> Left peb
   where
     filepath = maybe "" locFile mSourceLoc
