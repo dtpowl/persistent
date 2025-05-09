@@ -46,11 +46,14 @@ type Parser = Parsec Void String
 
 type ParseResult a = Either (ParseErrorBundle String Void) a
 
+-- @since 2.16.0.0
 data CumulativeParseResult a = CumulativeParseResult
     { cumulativeErrors :: [ParseErrorBundle String Void]
     , cumulativeData :: a
     }
 
+-- | Populates a CumulativeParseResult with a single error or datum
+-- @since 2.16.0.0
 toCumulativeParseResult
     :: (Monoid a)
     => ParseResult a
@@ -66,6 +69,8 @@ toCumulativeParseResult (Right res) =
         , cumulativeData = res
         }
 
+-- | Converts the errors in a CumulativeParseResult to a String
+-- @since 2.16.0.0
 renderErrors :: CumulativeParseResult a -> Maybe String
 renderErrors cpr =
     case cumulativeErrors cpr of
