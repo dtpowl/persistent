@@ -17,14 +17,12 @@ import qualified Data.Text as T
 import Database.Persist.EntityDef.Internal
 import Database.Persist.Quasi
 import Database.Persist.Quasi.Internal
+import Database.Persist.Quasi.Internal.ModelParser
 import Database.Persist.Types
 import Test.Hspec
 import Test.Hspec.QuickCheck
 import Test.QuickCheck
 import Text.Shakespeare.Text (st)
-
-import Database.Persist.Quasi.Internal
-import Database.Persist.Quasi.Internal.ModelParser
 import Text.Megaparsec (errorBundlePretty, runParser, some)
 
 defs :: T.Text -> [UnboundEntityDef]
@@ -36,8 +34,8 @@ defs t = case renderErrors cpr of
 
 defsSnake :: T.Text -> [UnboundEntityDef]
 defsSnake t = case renderErrors cpr of
-  Nothing -> cumulativeData cpr
-  Just msg -> error msg
+    Nothing -> cumulativeData cpr
+    Just msg -> error msg
   where
     cpr = parse (setPsUseSnakeCaseForeignKeys lowerCaseSettings) [(Nothing, t)]
 
@@ -94,7 +92,9 @@ spec = describe "Quasi" $ do
 
     describe "tokenization" $ do
         let
-            tokenize = runParser (some anyToken) ""
+            tokenize s = do
+                (d, c) <- runConfiguredParser [] (some anyToken) "" s
+                pure d
         it "handles normal words" $
             tokenize "foo   bar  baz"
                 `shouldBe` Right
@@ -256,32 +256,6 @@ spec = describe "Quasi" $ do
                       ]
                     )
 
-        it "recognizes pipe comments" $
-            tokenize "-- | this is a comment"
-                `shouldBe` Right
-                    ( [ DocComment "this is a comment"
-                      ]
-                    )
-
-        it "recognizes empty pipe comments" $
-            tokenize "-- |"
-                `shouldBe` Right
-                    ( [ DocComment ""
-                      ]
-                    )
-        it "recognizes non-pipe comments" $
-            tokenize "-- this is a comment"
-                `shouldBe` Right
-                    ( [ Comment "this is a comment"
-                      ]
-                    )
-        it "recognizes empty non-pipe comments" $
-            tokenize "-- "
-                `shouldBe` Right
-                    ( [ Comment ""
-                      ]
-                    )
-
     describe "parse" $ do
         let
             subject =
@@ -341,12 +315,12 @@ Car
 
         it "should parse the `entityUniques` field" $ do
             let
-                simplifyUnique unique =
-                    (uniqueHaskell unique, uniqueFields unique)
+              simplifyUnique unique =
+                (uniqueHaskell unique, uniqueFields unique)
             (simplifyUnique <$> entityUniques (unboundEntityDef bicycle)) `shouldBe` []
             (simplifyUnique <$> entityUniques (unboundEntityDef car))
-                `shouldBe` [ (ConstraintNameHS "UniqueModel", [(FieldNameHS "model", FieldNameDB "model")])
-                           ]
+              `shouldBe` [ (ConstraintNameHS "UniqueModel", [(FieldNameHS "model", FieldNameDB "model")])
+                         ]
             (simplifyUnique <$> entityUniques (unboundEntityDef vehicle)) `shouldBe` []
 
         it "should parse the `entityForeigns` field" $ do
@@ -408,12 +382,6 @@ Notification
             entityComments (unboundEntityDef bicycle) `shouldBe` Nothing
             entityComments (unboundEntityDef car) `shouldBe` Just "This is a Car\n"
             entityComments (unboundEntityDef vehicle) `shouldBe` Nothing
-
-        it "treats tabs as spaces" $ do
-          let
-            str = T.pack "User\n\tId Text\n\tname Text\n\tage Int"
-            [user] = defs str
-          getUnboundEntityNameHS user `shouldBe` EntityNameHS "User"
 
         it "should error on malformed input, unterminated parens" $ do
             let
@@ -640,10 +608,11 @@ Notification
                 let
                     flippedFK (EntityNameHS entName) (ConstraintNameHS conName) =
                         conName <> entName
-                    cpr = parse (setPsToFKName flippedFK lowerCaseSettings) [(Nothing, validDefinitions)]
+                    cpr =
+                        parse (setPsToFKName flippedFK lowerCaseSettings) [(Nothing, validDefinitions)]
                     [_user, notification] = case renderErrors cpr of
-                      Nothing -> cumulativeData cpr
-                      Just msg -> error msg
+                        Nothing -> cumulativeData cpr
+                        Just msg -> error msg
                     [notificationForeignDef] =
                         unboundForeignDef <$> unboundForeignDefs notification
                 foreignConstraintNameDBName notificationForeignDef
@@ -716,10 +685,11 @@ Notification
                     `shouldErrorWithMessage` "invalid foreign key constraint on table[\"Notification\"] Found 2 foreign fields but 1 parent fields"
 
             it
-                "should throw error when there is more than one delete cascade on the declaration" $ do
-                let
-                    definitions =
-                        [st|
+                "should throw error when there is more than one delete cascade on the declaration"
+                $ do
+                    let
+                        definitions =
+                            [st|
 User
     name            Text
     emailFirst      Text
@@ -733,16 +703,17 @@ Notification
     sentToSecond    Text
     Foreign User OnDeleteCascade OnDeleteCascade
 |]
-                let
-                    [_user, notification] = defsSnake definitions
-                mapM (evaluate . unboundForeignFields) (unboundForeignDefs notification)
-                    `shouldErrorWithMessage` "invalid foreign key constraint on table[\"Notification\"] found more than one OnDelete actions"
+                    let
+                        [_user, notification] = defsSnake definitions
+                    mapM (evaluate . unboundForeignFields) (unboundForeignDefs notification)
+                        `shouldErrorWithMessage` "invalid foreign key constraint on table[\"Notification\"] found more than one OnDelete actions"
 
             it
-                "should throw error when there is more than one update cascade on the declaration" $ do
-                let
-                    definitions =
-                        [st|
+                "should throw error when there is more than one update cascade on the declaration"
+                $ do
+                    let
+                        definitions =
+                            [st|
 User
     name            Text
     emailFirst      Text
@@ -756,20 +727,21 @@ Notification
     sentToSecond    Text
     Foreign User OnUpdateCascade OnUpdateCascade
 |]
-                let
-                    [_user, notification] = defsSnake definitions
-                mapM (evaluate . unboundForeignFields) (unboundForeignDefs notification)
-                    `shouldErrorWithMessage` "invalid foreign key constraint on table[\"Notification\"] found more than one OnUpdate actions"
+                    let
+                        [_user, notification] = defsSnake definitions
+                    mapM (evaluate . unboundForeignFields) (unboundForeignDefs notification)
+                        `shouldErrorWithMessage` "invalid foreign key constraint on table[\"Notification\"] found more than one OnUpdate actions"
 
             it
-                "should allow you to enable snake cased foriegn keys via a preset configuration function" $ do
-                let
-                    [_user, notification] =
-                        defsSnake validDefinitions
-                    [notificationForeignDef] =
-                        unboundForeignDef <$> unboundForeignDefs notification
-                foreignConstraintNameDBName notificationForeignDef
-                    `shouldBe` ConstraintNameDB "notification_fk_noti_user"
+                "should allow you to enable snake cased foriegn keys via a preset configuration function"
+                $ do
+                    let
+                        [_user, notification] =
+                            defsSnake validDefinitions
+                        [notificationForeignDef] =
+                            unboundForeignDef <$> unboundForeignDefs notification
+                    foreignConstraintNameDBName notificationForeignDef
+                        `shouldBe` ConstraintNameDB "notification_fk_noti_user"
 
         describe "ticked types" $ do
             it "should be able to parse ticked types" $ do

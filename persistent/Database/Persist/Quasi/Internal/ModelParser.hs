@@ -3,7 +3,6 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TupleSections #-}
-{-# LANGUAGE TypeSynonymInstances #-}
 
 module Database.Persist.Quasi.Internal.ModelParser
     ( SourceLoc (..)
@@ -24,13 +23,17 @@ module Database.Persist.Quasi.Internal.ModelParser
     , CumulativeParseResult (..)
     , toCumulativeParseResult
     , renderErrors
+    , runConfiguredParser
     ) where
 
+import Control.Monad.Trans.State
 import Data.List (intercalate)
 import Data.List.NonEmpty (NonEmpty (..))
 import qualified Data.List.NonEmpty as NEL
 import qualified Data.Map as M
 import Data.Maybe
+import Data.Set (Set)
+import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as Text
 import Data.Void
@@ -42,24 +45,31 @@ import Text.Megaparsec hiding (Token)
 import Text.Megaparsec.Char
 import qualified Text.Megaparsec.Char.Lexer as L
 
-type Parser = Parsec Void String
+-- We'll augment the parser with extra state to accumulate comments seen during parsing.
+-- Comments are lexed as whitespace, but will be used to generate documentation later.
+type ExtraState = [(SourcePos, CommentToken)]
 
+type Parser a =
+    StateT
+        ExtraState
+        (ParsecT Void String (Either (ParseErrorBundle String Void)))
+        a
+type InternalParseResult a =
+    Either (ParseErrorBundle String Void) (a, ExtraState)
 type ParseResult a = Either (ParseErrorBundle String Void) a
 
+-- | Run a parser using a provided ExtraState
 -- @since 2.16.0.0
-data CumulativeParseResult a = CumulativeParseResult
-    { cumulativeErrors :: [ParseErrorBundle String Void]
-    , cumulativeData :: a
-    }
-
 runConfiguredParser
-  :: Parser a
-  -> String
-  -> String
-  -> ParseResult a
-runConfiguredParser parser fp s = do
-  let (_s, parseResult) = runParser' parser initialState
-  parseResult
+    :: ExtraState
+    -> Parser a
+    -> String
+    -> String
+    -> InternalParseResult a
+runConfiguredParser acc parser fp s = do
+    (_internalState, parseResult) <-
+        runParserT' (runStateT parser acc) initialInternalState
+    parseResult
   where
     initialSourcePos =
         SourcePos
@@ -76,13 +86,19 @@ runConfiguredParser parser fp s = do
               pstateTabWidth = pos1
             , pstateLinePrefix = ""
             }
-    initialState =
+    initialInternalState =
         State
             { stateInput = s
             , stateOffset = 0
             , statePosState = initialPosState
             , stateParseErrors = []
             }
+
+-- @since 2.16.0.0
+data CumulativeParseResult a = CumulativeParseResult
+    { cumulativeErrors :: [ParseErrorBundle String Void]
+    , cumulativeData :: a
+    }
 
 -- | Populates a CumulativeParseResult with a single error or datum
 -- @since 2.16.0.0
@@ -135,13 +151,17 @@ data SourceLoc = SourceLoc
 
 -- @since 2.16.0.0
 data Token
-    = DocComment Text
-    | Comment Text
-    | Quotation Text
+    = Quotation Text
     | Equality Text Text
     | Parenthetical Text
     | BlockKey Text
     | PText Text
+    deriving (Eq, Ord, Show)
+
+-- @since 2.16.0.0
+data CommentToken
+    = DocComment Text
+    | Comment Text
     deriving (Eq, Ord, Show)
 
 -- | Converts a token into a Text representation for second-stage parsing or presentation to the user
@@ -149,26 +169,51 @@ data Token
 -- @since 2.16.0.0
 tokenContent :: Token -> Text
 tokenContent = \case
-    Comment s -> s
-    DocComment s -> s
     Quotation s -> s
     Equality l r -> mconcat [l, "=", r]
     Parenthetical s -> s
     PText s -> s
     BlockKey s -> s
 
+commentContent :: CommentToken -> Text
+commentContent = \case
+    Comment s -> s
+    DocComment s -> s
+
+docComment :: Parser (SourcePos, CommentToken)
+docComment = do
+    pos <- getSourcePos
+    content <- string "-- |" *> hspace *> takeWhileP (Just "character") (/= '\n')
+    pure (pos, DocComment (Text.pack content))
+
+comment :: Parser (SourcePos, CommentToken)
+comment = do
+    pos <- getSourcePos
+    content <-
+        (string "--" <|> string "#")
+            *> hspace
+            *> takeWhileP (Just "character") (/= '\n')
+    pure (pos, Comment (Text.pack content))
+
+skipComment :: Parser ()
+skipComment = do
+    content <- docComment <|> comment
+    comments <- get
+    put $ comments ++ [content]
+    pure ()
+
 spaceConsumer :: Parser ()
 spaceConsumer =
     L.space
         hspace1
-        (L.skipLineComment "--")
+        skipComment
         empty
 
 spaceConsumerN :: Parser ()
 spaceConsumerN =
     L.space
         space1
-        (L.skipLineComment "--")
+        skipComment
         empty
 
 contentChar :: Parser Char
@@ -194,21 +239,11 @@ contentChar =
                 else pure backslash
         ]
 
-nonSpaceChar :: Parser Char
-nonSpaceChar =
-    choice
-        [ alphaNumChar
-        , markChar
-        , punctuationChar
-        , symbolChar
-        ]
-
 nonLineSpaceChar :: Parser Char
 nonLineSpaceChar = choice [char ' ', char '\t']
 
 -- This is a replacement for `Text.Megaparsec.Char.Lexer.charLiteral`;
 -- it does nearly the same thing but additionally supports escaped parentheses.
-
 charLiteral :: Parser Char
 charLiteral = label "literal character" $ do
     char1 <- anySingle
@@ -297,29 +332,59 @@ ptext = label "plain token" $ do
     str <- L.lexeme spaceConsumer $ some contentChar
     pure . PText . Text.pack $ str
 
-docComment :: Parser Token
-docComment = label "doc comment" $ do
-    _ <- hspace *> string "-- |" <* hspace
-    str <- many (nonSpaceChar <|> nonLineSpaceChar)
-    pure . DocComment . Text.pack $ str
-
-comment :: Parser Token
-comment = label "comment" $ do
-    _ <- hspace *> (string "--" <|> string "#") <* hspace
-    str <- many (nonSpaceChar <|> nonLineSpaceChar)
-    pure . Comment . Text.pack $ str
-
 -- @since 2.16.0.0
 anyToken :: Parser Token
 anyToken =
     choice
         [ try equality
-        , docComment
-        , comment
         , quotation
         , parenthetical
         , ptext
         ]
+
+class Block a where
+    blockFirstPos :: a -> SourcePos
+    blockMembers :: a -> [Member]
+    blockSetMembers :: [Member] -> a -> a
+    blockSetNELMembers :: NonEmpty Member -> a -> a
+    blockSetDocCommentBlock :: Maybe DocCommentBlock -> a -> a
+
+instance Block EntityBlock where
+    blockFirstPos = entityHeaderPos . entityBlockEntityHeader
+    blockMembers = entityBlockMembers
+    blockSetMembers ms b = b{entityBlockMembers = ms}
+    blockSetNELMembers nel = blockSetMembers (NEL.toList nel)
+    blockSetDocCommentBlock dcb b = b{entityBlockDocCommentBlock = dcb}
+
+instance Block ExtraBlock where
+    blockFirstPos = extraBlockHeaderPos . extraBlockExtraBlockHeader
+    blockMembers = NEL.toList . extraBlockMembers
+    blockSetMembers ms b = case NEL.nonEmpty ms of
+        Nothing -> b
+        Just nel -> blockSetNELMembers nel b
+    blockSetNELMembers nel b = b{extraBlockMembers = nel}
+    blockSetDocCommentBlock dcb b = b{extraBlockDocCommentBlock = dcb}
+
+blockLastPos :: (Block a) => a -> SourcePos
+blockLastPos b = case blockMembers b of
+    [] -> blockFirstPos b
+    members -> maximum $ fmap memberEndPos members
+
+blockBlockAttrs :: (Block a) => a -> [BlockAttr]
+blockBlockAttrs eb =
+    foldMap f (blockMembers eb)
+  where
+    f = \case
+        MemberBlockAttr fs -> [fs]
+        _ -> []
+
+blockExtraBlocks :: (Block a) => a -> [ExtraBlock]
+blockExtraBlocks eb =
+    foldMap f (blockMembers eb)
+  where
+    f = \case
+        MemberExtraBlock ex -> [ex]
+        _ -> []
 
 data ParsedEntityDef = ParsedEntityDef
     { parsedEntityDefComments :: [Text]
@@ -377,15 +442,6 @@ data BlockAttr = BlockAttr
 data Member = MemberExtraBlock ExtraBlock | MemberBlockAttr BlockAttr
     deriving (Show)
 
--- | The source position at the beginning of the block's final line.
-entityBlockEndPos :: EntityBlock -> SourcePos
-entityBlockEndPos eb = case entityBlockMembers eb of
-    [] -> entityBlockHeaderPos eb
-    _ -> maximum $ fmap memberEndPos (entityBlockMembers eb)
-
-entityBlockHeaderPos :: EntityBlock -> SourcePos
-entityBlockHeaderPos = entityHeaderPos . entityBlockEntityHeader
-
 -- | The source position at the beginning of the member's first line.
 memberPos :: Member -> SourcePos
 memberPos (MemberBlockAttr fs) = blockAttrPos fs
@@ -402,22 +458,6 @@ memberEndPos (MemberExtraBlock ex) = memberEndPos . NEL.last . extraBlockMembers
 memberBlockAttrs :: Member -> [BlockAttr]
 memberBlockAttrs (MemberBlockAttr fs) = [fs]
 memberBlockAttrs (MemberExtraBlock ex) = foldMap memberBlockAttrs . extraBlockMembers $ ex
-
-entityBlockBlockAttrs :: EntityBlock -> [BlockAttr]
-entityBlockBlockAttrs eb =
-    foldMap f (entityBlockMembers eb)
-  where
-    f = \case
-        MemberBlockAttr fs -> [fs]
-        _ -> []
-
-entityBlockExtraBlocks :: EntityBlock -> [ExtraBlock]
-entityBlockExtraBlocks eb =
-    foldMap f (entityBlockMembers eb)
-  where
-    f = \case
-        MemberExtraBlock ex -> [ex]
-        _ -> []
 
 extraBlocksAsMap :: [ExtraBlock] -> M.Map Text [ExtraLine]
 extraBlocksAsMap exs = M.fromList $ fmap asPair exs
@@ -502,83 +542,93 @@ entityBlock = L.indentBlock spaceConsumerN innerParser
 entitiesFromDocument :: Parser [EntityBlock]
 entitiesFromDocument = many entityBlock
 
-docCommentBlock :: Parser DocCommentBlock
-docCommentBlock = do
-    pos <- getSourcePos
-    dc <- hspace *> docComment <* space
-    cb <- many $ hspace *> (docComment <|> comment) <* space
-    pure $
-        DocCommentBlock
-            { docCommentBlockLines = [tokenContent dc] <> map tokenContent cb
-            , docCommentBlockPos = pos
-            }
-
-docCommentsFromDocument :: Parser [DocCommentBlock]
-docCommentsFromDocument =
-    fmap snd . extractFrom <$> findAllDcBlocks
-  where
-    findAllDcBlocks = sepCap (match docCommentBlock)
-    extractFrom = \case
-        [] -> []
-        Right x : xs -> x : extractFrom xs
-        Left _ : xs -> extractFrom xs
-
 docCommentBlockText :: DocCommentBlock -> Text
 docCommentBlockText dcb = Text.unlines $ docCommentBlockLines dcb
 
-associateDocComments :: [DocCommentBlock] -> [EntityBlock] -> [EntityBlock]
-associateDocComments _ [] = []
-associateDocComments [] es = es
-associateDocComments (dc : rest) es = associateDocComments rest (applyDocToBestEntity dc es)
+isDocComment :: CommentToken -> Bool
+isDocComment tok = case tok of
+    DocComment _ -> True
+    _ -> False
 
-commentIsPositionedFor :: DocCommentBlock -> SourcePos -> Bool
-commentIsPositionedFor dc sp =
-    (sourceLine dcpos < sourceLine sp) && (sourceColumn dcpos <= sourceColumn sp)
+docCommentBlockFromPositionedTokens
+    :: [(SourcePos, CommentToken)] -> Maybe DocCommentBlock
+docCommentBlockFromPositionedTokens ptoks =
+    case NEL.nonEmpty ptoks of
+        Nothing -> Nothing
+        Just nel ->
+            Just $
+                DocCommentBlock
+                    { docCommentBlockLines = NEL.toList $ fmap (commentContent . snd) nel
+                    , docCommentBlockPos = fst $ NEL.head nel
+                    }
+
+associateCommentLines
+    :: [(SourcePos, CommentToken)] -> [EntityBlock] -> [EntityBlock]
+associateCommentLines _ [] = []
+associateCommentLines [] es = es
+associateCommentLines cls (eh : et) =
+    applyCommentLinesToBlock candidateLines eh
+        : associateCommentLines remainingLines et
   where
-    dcpos = docCommentBlockPos dc
+    dcLines = dropWhile (not . isDocComment . snd) cls
+    candidateLines =
+        takeWhile
+            (\(spos, _) -> sourceLine spos < sourceLine (blockLastPos eh))
+            dcLines
+    remainingLines = drop (length candidateLines) dcLines
 
-applyDocToBestEntity :: DocCommentBlock -> [EntityBlock] -> [EntityBlock]
-applyDocToBestEntity _ [] = []
-applyDocToBestEntity dc (e : rest) =
-    if commentIsPositionedFor dc (entityBlockEndPos e)
-        then applyDocToEntity dc e : rest
-        else e : applyDocToBestEntity dc rest
-
-applyDocToEntity :: DocCommentBlock -> EntityBlock -> EntityBlock
-applyDocToEntity dc e =
-    if commentIsPositionedFor dc (entityBlockHeaderPos e)
-        then e{entityBlockDocCommentBlock = Just dc}
-        else e{entityBlockMembers = applyDocToBestMember dc (entityBlockMembers e)}
-
-applyDocToBestMember :: DocCommentBlock -> [Member] -> [Member]
-applyDocToBestMember _ [] = []
-applyDocToBestMember dc (m : rest) =
-    if commentIsPositionedFor dc (memberPos m)
-        then applyDocToMember dc m : rest
-        else m : applyDocToBestMember dc rest
-
-applyDocToMember :: DocCommentBlock -> Member -> Member
-applyDocToMember dc (MemberBlockAttr fs) = MemberBlockAttr fs{blockAttrDocCommentBlock = Just dc}
-applyDocToMember dc (MemberExtraBlock ex) =
-    if commentIsPositionedFor
-        dc
-        (extraBlockHeaderPos . extraBlockExtraBlockHeader $ ex)
-        then MemberExtraBlock ex{extraBlockDocCommentBlock = Just dc}
-        else MemberExtraBlock ex{extraBlockMembers = appliedNel}
+-- | Accepts a list of (position, comment) pairs and associates them with the
+-- block and its members.
+applyCommentLinesToBlock :: (Block a) => [(SourcePos, CommentToken)] -> a -> a
+applyCommentLinesToBlock [] a = a
+applyCommentLinesToBlock cls a = blockSetDocCommentBlock dcb $ blockSetMembers commentedMembers a
   where
-    appliedList = applyDocToBestMember dc $ NEL.toList (extraBlockMembers ex)
-    appliedNel = case appliedList of
-        a : rest -> a :| rest
-        [] -> error "unreachable" -- appliedList is known to be non-empty
+    startLine = sourceLine $ blockFirstPos a
+    headerLines = takeWhile (\(spos, _t) -> sourceLine spos < startLine) cls
+    memberLines = dropWhile (\(spos, _t) -> sourceLine spos <= startLine) cls
+    dcb = docCommentBlockFromPositionedTokens headerLines
+    commentedMembers = associateCommentLinesWithMembers memberLines (blockMembers a)
+
+associateCommentLinesWithMembers
+    :: [(SourcePos, CommentToken)] -> [Member] -> [Member]
+associateCommentLinesWithMembers [] ms = ms
+associateCommentLinesWithMembers _ [] = []
+associateCommentLinesWithMembers cls ms@(mh : mt) = do
+    applyCommentLinesToMember candidateLines mh
+        : associateCommentLinesWithMembers remainingLines mt
+  where
+    -- we must ignore comments that share a line number with any member
+    membersLinePoses = Set.fromDistinctAscList $ fmap (sourceLine . memberPos) ms
+    filteredLines = filter (\(pos, _t) -> Set.notMember (sourceLine pos) membersLinePoses) cls
+    dcLines = dropWhile (not . isDocComment . snd) filteredLines
+    candidateLines =
+        takeWhile (\(spos, _) -> sourceLine spos < sourceLine (memberEndPos mh)) dcLines
+    remainingLines = drop (length candidateLines) dcLines
+
+applyCommentLinesToMember :: [(SourcePos, CommentToken)] -> Member -> Member
+applyCommentLinesToMember cls m = case m of
+    MemberBlockAttr a -> MemberBlockAttr $ applyCommentLinesToBlockAttr cls a
+    MemberExtraBlock b -> MemberExtraBlock $ applyCommentLinesToBlock cls b
+
+applyCommentLinesToBlockAttr
+    :: [(SourcePos, CommentToken)] -> BlockAttr -> BlockAttr
+applyCommentLinesToBlockAttr [] a = a
+applyCommentLinesToBlockAttr cls a = a{blockAttrDocCommentBlock = dcb}
+  where
+    ls =
+        takeWhile
+            (\(spos, _t) -> sourceLine spos < sourceLine (blockAttrPos a))
+            cls
+    dcb = docCommentBlockFromPositionedTokens ls
 
 parseEntities
     :: Text
     -> String
     -> ParseResult [EntityBlock]
 parseEntities fp s = do
-    entities <- runConfiguredParser entitiesFromDocument (Text.unpack fp) s
-    docComments <- runConfiguredParser docCommentsFromDocument (Text.unpack fp) s
-    pure $ associateDocComments docComments entities
+    (entities, comments) <-
+        runConfiguredParser [] entitiesFromDocument (Text.unpack fp) s
+    pure $ associateCommentLines comments entities
 
 toParsedEntityDef :: Maybe SourceLoc -> EntityBlock -> ParsedEntityDef
 toParsedEntityDef mSourceLoc eb =
@@ -603,9 +653,9 @@ toParsedEntityDef mSourceLoc eb =
     entityNameHS = EntityNameHS . entityHeaderTableName . entityBlockEntityHeader $ eb
 
     attributePair a = (blockAttrTokens a, docCommentBlockText <$> blockAttrDocCommentBlock a)
-    parsedFieldAttributes = fmap attributePair (entityBlockBlockAttrs eb)
+    parsedFieldAttributes = fmap attributePair (blockBlockAttrs eb)
 
-    extras = extraBlocksAsMap (entityBlockExtraBlocks eb)
+    extras = extraBlocksAsMap (blockExtraBlocks eb)
     filepath = maybe "" locFile mSourceLoc
     relativeStartLine = maybe 0 locStartLine mSourceLoc
     relativeStartCol = maybe 0 locStartCol mSourceLoc
@@ -614,17 +664,17 @@ toParsedEntityDef mSourceLoc eb =
             SourceSpan
                 { spanFile = filepath
                 , spanStartLine =
-                    relativeStartLine + (unPos . sourceLine $ entityBlockHeaderPos eb)
-                , spanEndLine = relativeStartLine + (unPos . sourceLine $ entityBlockEndPos eb)
+                    relativeStartLine + (unPos . sourceLine $ blockFirstPos eb)
+                , spanEndLine = relativeStartLine + (unPos . sourceLine $ blockLastPos eb)
                 , spanStartCol =
-                    relativeStartCol + (unPos . sourceColumn $ entityBlockHeaderPos eb)
-                , spanEndCol = unPos . sourceColumn $ entityBlockEndPos eb
+                    relativeStartCol + (unPos . sourceColumn $ blockFirstPos eb)
+                , spanEndCol = unPos . sourceColumn $ blockLastPos eb
                 }
 
 parseSource :: Maybe SourceLoc -> Text -> ParseResult [ParsedEntityDef]
 parseSource mSourceLoc source =
     case parseEntities filepath (Text.unpack source) of
-        Right blocks -> Right $ toParsedEntityDef mSourceLoc <$> blocks
+        Right blocks -> Right (toParsedEntityDef mSourceLoc <$> blocks)
         Left peb -> Left peb
   where
     filepath = maybe "" locFile mSourceLoc
