@@ -226,7 +226,7 @@ parse
   :: PersistSettings
   -> [(Maybe SourceLoc, Text)]
   -> CumulativeParseResult [UnboundEntityDef]
-parse ps inputs = foldMap toCumulativeParseResult $ map (uncurry parseChunk) inputs
+parse ps = foldMap $ toCumulativeParseResult . uncurry parseChunk
   where
     parseChunk :: Maybe SourceLoc -> Text -> ParseResult [UnboundEntityDef]
     parseChunk mSourceLoc source = (fmap . fmap) (mkUnboundEntityDef ps) (parseSource mSourceLoc source)
