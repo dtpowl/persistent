@@ -651,7 +651,7 @@ specsWith runDb = describe "persistent" $ do
     it "provides comments on entity def" $ do
       getEntityComments edef
         `shouldBe`
-          Just "This is a doc comment for a relationship.\nOnly the first line requires a pipe.\nPipes are optional on subsequent lines."
+          Just "This is a doc comment for a relationship.\nOnly the first line requires a pipe.\nPipes are optional on subsequent lines.\n"
     it "provides comments on the field" $ do
       let [nameField, _] = getEntityFields edef
       fieldComments nameField
