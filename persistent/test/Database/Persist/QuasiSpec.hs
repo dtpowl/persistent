@@ -26,18 +26,17 @@ import Text.Shakespeare.Text (st)
 import Text.Megaparsec (errorBundlePretty, runParser, some)
 
 defs :: T.Text -> [UnboundEntityDef]
-defs t = case renderErrors cpr of
-    Nothing -> cumulativeData cpr
-    Just msg -> error msg
-  where
-    cpr = parse lowerCaseSettings [(Nothing, t)]
+defs = defsWithSettings lowerCaseSettings
 
 defsSnake :: T.Text -> [UnboundEntityDef]
-defsSnake t = case renderErrors cpr of
-    Nothing -> cumulativeData cpr
-    Just msg -> error msg
+defsSnake = defsWithSettings $ setPsUseSnakeCaseForeignKeys lowerCaseSettings
+
+defsWithSettings :: PersistSettings -> T.Text -> [UnboundEntityDef]
+defsWithSettings ps t = case cpr of
+    Right res -> res
+    Left errs -> error $ renderErrors errs
   where
-    cpr = parse (setPsUseSnakeCaseForeignKeys lowerCaseSettings) [(Nothing, t)]
+    cpr = parse ps [(Nothing, t)]
 
 spec :: Spec
 spec = describe "Quasi" $ do
@@ -608,11 +607,7 @@ Notification
                 let
                     flippedFK (EntityNameHS entName) (ConstraintNameHS conName) =
                         conName <> entName
-                    cpr =
-                        parse (setPsToFKName flippedFK lowerCaseSettings) [(Nothing, validDefinitions)]
-                    [_user, notification] = case renderErrors cpr of
-                        Nothing -> cumulativeData cpr
-                        Just msg -> error msg
+                    [_user, notification] = defsWithSettings (setPsToFKName flippedFK lowerCaseSettings) validDefinitions
                     [notificationForeignDef] =
                         unboundForeignDef <$> unboundForeignDefs notification
                 foreignConstraintNameDBName notificationForeignDef

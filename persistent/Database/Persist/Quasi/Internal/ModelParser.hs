@@ -22,7 +22,6 @@ module Database.Persist.Quasi.Internal.ModelParser
     , ParseResult
     , CumulativeParseResult
     , toCumulativeParseResult
-    , cumulativeData
     , renderErrors
     , runConfiguredParser
     , initialExtraState
@@ -74,11 +73,6 @@ type InternalParseResult a = Either EntityParseError (a, ExtraState)
 type ParseResult a = Either EntityParseError a
 type CumulativeParseResult a = Either [EntityParseError] a
 
-cumulativeData :: (Monoid a) => CumulativeParseResult a -> a
-cumulativeData cpr = case cpr of
-    Left _ -> mempty
-    Right r -> r
-
 -- | Run a parser using a provided ExtraState
 -- @since 2.16.0.0
 runConfiguredParser
@@ -113,12 +107,11 @@ runConfiguredParser acc parser fp s = parseResult
             , stateParseErrors = []
             }
 
--- | Converts the errors in a CumulativeParseResult to a String
+-- | Renders a list of EntityParseErrors as a String using `errorBundlePretty`,
+-- separated by line breaks.
 -- @since 2.16.0.0
-renderErrors :: CumulativeParseResult a -> Maybe String
-renderErrors cpr = case cpr of
-    Right _ -> Nothing
-    Left errs -> Just $ intercalate "\n" $ fmap errorBundlePretty errs
+renderErrors :: [EntityParseError] -> String
+renderErrors errs = intercalate "\n" $ fmap errorBundlePretty errs
 
 toCumulativeParseResult
     :: (Monoid a) => [ParseResult a] -> CumulativeParseResult a
@@ -442,17 +435,17 @@ entityHeader = do
             }
 
 appendCommentToState :: (SourcePos, CommentToken) -> Parser ()
-appendCommentToState ptok = do
-    es <- get
-    let
-        comments = esPositionedCommentTokens es
-    void $ put es{esPositionedCommentTokens = ptok : comments}
+appendCommentToState ptok =
+    modify $ \es ->
+        let
+            comments = esPositionedCommentTokens es
+         in
+            es{esPositionedCommentTokens = ptok : comments}
 
 setLastDocumentablePosition :: Parser ()
 setLastDocumentablePosition = do
     pos <- getSourcePos
-    es <- get
-    void $ put es{esLastDocumentablePosition = Just pos}
+    modify $ \es -> es{esLastDocumentablePosition = Just pos}
 
 getDcb :: Parser (Maybe DocCommentBlock)
 getDcb = do

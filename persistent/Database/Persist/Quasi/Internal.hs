@@ -24,7 +24,6 @@ module Database.Persist.Quasi.Internal
     , takeColsEx
     , CumulativeParseResult (..)
     , renderErrors
-    , cumulativeData
 
       -- * UnboundEntityDef
     , UnboundEntityDef (..)
