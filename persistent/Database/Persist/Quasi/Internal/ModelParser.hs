@@ -20,8 +20,9 @@ module Database.Persist.Quasi.Internal.ModelParser
     , parseSource
     , memberBlockAttrs
     , ParseResult
-    , CumulativeParseResult (..)
+    , CumulativeParseResult
     , toCumulativeParseResult
+    , cumulativeData
     , renderErrors
     , runConfiguredParser
     , initialExtraState
@@ -29,6 +30,8 @@ module Database.Persist.Quasi.Internal.ModelParser
 
 import Control.Monad (void)
 import Control.Monad.Trans.State
+import Data.Either (partitionEithers)
+import Data.Foldable (fold)
 import Data.List (intercalate)
 import Data.List.NonEmpty (NonEmpty (..))
 import qualified Data.List.NonEmpty as NEL
@@ -62,11 +65,19 @@ initialExtraState =
 type Parser a =
     StateT
         ExtraState
-        (ParsecT Void String (Either (ParseErrorBundle String Void)))
+        (Parsec Void String)
         a
-type InternalParseResult a =
-    Either (ParseErrorBundle String Void) (a, ExtraState)
-type ParseResult a = Either (ParseErrorBundle String Void) a
+
+type EntityParseError = ParseErrorBundle String Void
+type InternalParseResult a = Either EntityParseError (a, ExtraState)
+
+type ParseResult a = Either EntityParseError a
+type CumulativeParseResult a = Either [EntityParseError] a
+
+cumulativeData :: (Monoid a) => CumulativeParseResult a -> a
+cumulativeData cpr = case cpr of
+    Left _ -> mempty
+    Right r -> r
 
 -- | Run a parser using a provided ExtraState
 -- @since 2.16.0.0
@@ -76,11 +87,9 @@ runConfiguredParser
     -> String
     -> String
     -> InternalParseResult a
-runConfiguredParser acc parser fp s = do
-    (_internalState, parseResult) <-
-        runParserT' (runStateT parser acc) initialInternalState
-    parseResult
+runConfiguredParser acc parser fp s = parseResult
   where
+    (_internalState, parseResult) = runParser' (runStateT parser acc) initialInternalState
     initialSourcePos =
         SourcePos
             { sourceName = fp
@@ -104,50 +113,18 @@ runConfiguredParser acc parser fp s = do
             , stateParseErrors = []
             }
 
--- @since 2.16.0.0
-data CumulativeParseResult a = CumulativeParseResult
-    { cumulativeErrors :: [ParseErrorBundle String Void]
-    , cumulativeData :: a
-    }
-
--- | Populates a CumulativeParseResult with a single error or datum
--- @since 2.16.0.0
-toCumulativeParseResult
-    :: (Monoid a)
-    => ParseResult a
-    -> CumulativeParseResult a
-toCumulativeParseResult (Left peb) =
-    CumulativeParseResult
-        { cumulativeErrors = [peb]
-        , cumulativeData = mempty
-        }
-toCumulativeParseResult (Right res) =
-    CumulativeParseResult
-        { cumulativeErrors = []
-        , cumulativeData = res
-        }
-
 -- | Converts the errors in a CumulativeParseResult to a String
 -- @since 2.16.0.0
 renderErrors :: CumulativeParseResult a -> Maybe String
-renderErrors cpr =
-    case cumulativeErrors cpr of
-        [] -> Nothing
-        pebs -> Just $ intercalate "\n" $ fmap errorBundlePretty pebs
+renderErrors cpr = case cpr of
+    Right _ -> Nothing
+    Left errs -> Just $ intercalate "\n" $ fmap errorBundlePretty errs
 
-instance (Semigroup a) => Semigroup (CumulativeParseResult a) where
-    (<>) l r =
-        CumulativeParseResult
-            { cumulativeErrors = cumulativeErrors l ++ cumulativeErrors r
-            , cumulativeData = cumulativeData l <> cumulativeData r
-            }
-
-instance (Monoid a) => Monoid (CumulativeParseResult a) where
-    mempty =
-        CumulativeParseResult
-            { cumulativeErrors = mempty
-            , cumulativeData = mempty
-            }
+toCumulativeParseResult
+    :: (Monoid a) => [ParseResult a] -> CumulativeParseResult a
+toCumulativeParseResult prs = case partitionEithers prs of
+    ([], results) -> Right $ fold results
+    (errs, _) -> Left errs
 
 -- | Source location: file and line/col information. This is half of a 'SourceSpan'.
 --
@@ -350,39 +327,6 @@ anyToken =
         , ptext
         ]
 
-class Block a where
-    blockFirstPos :: a -> SourcePos
-    blockMembers :: a -> [Member]
-
-instance Block EntityBlock where
-    blockFirstPos = entityHeaderPos . entityBlockEntityHeader
-    blockMembers = entityBlockMembers
-
-instance Block ExtraBlock where
-    blockFirstPos = extraBlockHeaderPos . extraBlockExtraBlockHeader
-    blockMembers = NEL.toList . extraBlockMembers
-
-blockLastPos :: (Block a) => a -> SourcePos
-blockLastPos b = case blockMembers b of
-    [] -> blockFirstPos b
-    members -> maximum $ fmap memberEndPos members
-
-blockBlockAttrs :: (Block a) => a -> [BlockAttr]
-blockBlockAttrs eb =
-    foldMap f (blockMembers eb)
-  where
-    f = \case
-        MemberBlockAttr fs -> [fs]
-        _ -> []
-
-blockExtraBlocks :: (Block a) => a -> [ExtraBlock]
-blockExtraBlocks eb =
-    foldMap f (blockMembers eb)
-  where
-    f = \case
-        MemberExtraBlock ex -> [ex]
-        _ -> []
-
 data ParsedEntityDef = ParsedEntityDef
     { parsedEntityDefComments :: [Text]
     , parsedEntityDefEntityName :: EntityNameHS
@@ -414,6 +358,28 @@ data EntityBlock = EntityBlock
     , entityBlockMembers :: [Member]
     }
     deriving (Show)
+
+entityBlockFirstPos :: EntityBlock -> SourcePos
+entityBlockFirstPos = entityHeaderPos . entityBlockEntityHeader
+
+entityBlockLastPos :: EntityBlock -> SourcePos
+entityBlockLastPos eb = case entityBlockMembers eb of
+    [] -> entityBlockFirstPos eb
+    members -> maximum $ fmap memberEndPos members
+
+entityBlockBlockAttrs :: EntityBlock -> [BlockAttr]
+entityBlockBlockAttrs = foldMap f <$> entityBlockMembers
+  where
+    f m = case m of
+        MemberExtraBlock _ -> []
+        MemberBlockAttr ba -> [ba]
+
+entityBlockExtraBlocks :: EntityBlock -> [ExtraBlock]
+entityBlockExtraBlocks = foldMap f <$> entityBlockMembers
+  where
+    f m = case m of
+        MemberExtraBlock eb -> [eb]
+        MemberBlockAttr _ -> []
 
 data ExtraBlockHeader = ExtraBlockHeader
     { extraBlockHeaderKey :: Text
@@ -480,7 +446,7 @@ appendCommentToState ptok = do
     es <- get
     let
         comments = esPositionedCommentTokens es
-    void $ put es{esPositionedCommentTokens = comments ++ [ptok]}
+    void $ put es{esPositionedCommentTokens = ptok : comments}
 
 setLastDocumentablePosition :: Parser ()
 setLastDocumentablePosition = do
@@ -492,11 +458,10 @@ getDcb :: Parser (Maybe DocCommentBlock)
 getDcb = do
     es <- get
     let
-        comments = esPositionedCommentTokens es
+        comments = reverse $ esPositionedCommentTokens es
     _ <- put es{esPositionedCommentTokens = []}
     let
         candidates = dropWhile (\(_sp, ct) -> not (isDocComment ct)) comments
-    let
         filteredCandidates = dropWhile (commentIsIncorrectlyPositioned es) candidates
     pure $ docCommentBlockFromPositionedTokens filteredCandidates
   where
@@ -625,9 +590,9 @@ toParsedEntityDef mSourceLoc eb =
     entityNameHS = EntityNameHS . entityHeaderTableName . entityBlockEntityHeader $ eb
 
     attributePair a = (blockAttrTokens a, docCommentBlockText <$> blockAttrDocCommentBlock a)
-    parsedFieldAttributes = fmap attributePair (blockBlockAttrs eb)
+    parsedFieldAttributes = fmap attributePair (entityBlockBlockAttrs eb)
 
-    extras = extraBlocksAsMap (blockExtraBlocks eb)
+    extras = extraBlocksAsMap (entityBlockExtraBlocks eb)
     filepath = maybe "" locFile mSourceLoc
     relativeStartLine = maybe 0 locStartLine mSourceLoc
     relativeStartCol = maybe 0 locStartCol mSourceLoc
@@ -636,11 +601,11 @@ toParsedEntityDef mSourceLoc eb =
             SourceSpan
                 { spanFile = filepath
                 , spanStartLine =
-                    relativeStartLine + (unPos . sourceLine $ blockFirstPos eb)
-                , spanEndLine = relativeStartLine + (unPos . sourceLine $ blockLastPos eb)
+                    relativeStartLine + (unPos . sourceLine $ entityBlockFirstPos eb)
+                , spanEndLine = relativeStartLine + (unPos . sourceLine $ entityBlockLastPos eb)
                 , spanStartCol =
-                    relativeStartCol + (unPos . sourceColumn $ blockFirstPos eb)
-                , spanEndCol = unPos . sourceColumn $ blockLastPos eb
+                    relativeStartCol + (unPos . sourceColumn $ entityBlockFirstPos eb)
+                , spanEndCol = unPos . sourceColumn $ entityBlockLastPos eb
                 }
 
 parseSource :: Maybe SourceLoc -> Text -> ParseResult [ParsedEntityDef]

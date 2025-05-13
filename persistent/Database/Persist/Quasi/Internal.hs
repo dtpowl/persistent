@@ -24,6 +24,7 @@ module Database.Persist.Quasi.Internal
     , takeColsEx
     , CumulativeParseResult (..)
     , renderErrors
+    , cumulativeData
 
       -- * UnboundEntityDef
     , UnboundEntityDef (..)
@@ -226,10 +227,11 @@ parse
   :: PersistSettings
   -> [(Maybe SourceLoc, Text)]
   -> CumulativeParseResult [UnboundEntityDef]
-parse ps = foldMap $ toCumulativeParseResult . uncurry parseChunk
+parse ps chunks = toCumulativeParseResult $ map parseChunk chunks
   where
-    parseChunk :: Maybe SourceLoc -> Text -> ParseResult [UnboundEntityDef]
-    parseChunk mSourceLoc source = (fmap . fmap) (mkUnboundEntityDef ps) (parseSource mSourceLoc source)
+    parseChunk :: (Maybe SourceLoc, Text) -> ParseResult [UnboundEntityDef]
+    parseChunk (mSourceLoc, source) =
+      (fmap . fmap) (mkUnboundEntityDef ps) (parseSource mSourceLoc source)
 
 entityNamesFromParsedDef
     :: PersistSettings -> ParsedEntityDef -> (EntityNameHS, EntityNameDB)
