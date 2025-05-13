@@ -93,7 +93,7 @@ spec = describe "Quasi" $ do
     describe "tokenization" $ do
         let
             tokenize s = do
-                (d, c) <- runConfiguredParser [] (some anyToken) "" s
+                (d, c) <- runConfiguredParser initialExtraState (some anyToken) "" s
                 pure d
         it "handles normal words" $
             tokenize "foo   bar  baz"

@@ -24,30 +24,40 @@ module Database.Persist.Quasi.Internal.ModelParser
     , toCumulativeParseResult
     , renderErrors
     , runConfiguredParser
+    , initialExtraState
     ) where
 
+import Control.Monad (void)
 import Control.Monad.Trans.State
 import Data.List (intercalate)
 import Data.List.NonEmpty (NonEmpty (..))
 import qualified Data.List.NonEmpty as NEL
 import qualified Data.Map as M
 import Data.Maybe
-import Data.Set (Set)
-import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as Text
 import Data.Void
 import Database.Persist.Types
 import Database.Persist.Types.SourceSpan
 import Language.Haskell.TH.Syntax (Lift)
-import Replace.Megaparsec (sepCap)
 import Text.Megaparsec hiding (Token)
 import Text.Megaparsec.Char
 import qualified Text.Megaparsec.Char.Lexer as L
 
 -- We'll augment the parser with extra state to accumulate comments seen during parsing.
 -- Comments are lexed as whitespace, but will be used to generate documentation later.
-type ExtraState = [(SourcePos, CommentToken)]
+data ExtraState = ExtraState
+    { esPositionedCommentTokens :: [(SourcePos, CommentToken)]
+    , esLastDocumentablePosition :: Maybe SourcePos
+    }
+
+-- @since 2.16.1.0
+initialExtraState :: ExtraState
+initialExtraState =
+    ExtraState
+        { esPositionedCommentTokens = []
+        , esLastDocumentablePosition = Nothing
+        }
 
 type Parser a =
     StateT
@@ -198,9 +208,7 @@ comment = do
 skipComment :: Parser ()
 skipComment = do
     content <- docComment <|> comment
-    comments <- get
-    put $ comments ++ [content]
-    pure ()
+    void $ appendCommentToState content
 
 spaceConsumer :: Parser ()
 spaceConsumer =
@@ -345,25 +353,14 @@ anyToken =
 class Block a where
     blockFirstPos :: a -> SourcePos
     blockMembers :: a -> [Member]
-    blockSetMembers :: [Member] -> a -> a
-    blockSetNELMembers :: NonEmpty Member -> a -> a
-    blockSetDocCommentBlock :: Maybe DocCommentBlock -> a -> a
 
 instance Block EntityBlock where
     blockFirstPos = entityHeaderPos . entityBlockEntityHeader
     blockMembers = entityBlockMembers
-    blockSetMembers ms b = b{entityBlockMembers = ms}
-    blockSetNELMembers nel = blockSetMembers (NEL.toList nel)
-    blockSetDocCommentBlock dcb b = b{entityBlockDocCommentBlock = dcb}
 
 instance Block ExtraBlock where
     blockFirstPos = extraBlockHeaderPos . extraBlockExtraBlockHeader
     blockMembers = NEL.toList . extraBlockMembers
-    blockSetMembers ms b = case NEL.nonEmpty ms of
-        Nothing -> b
-        Just nel -> blockSetNELMembers nel b
-    blockSetNELMembers nel b = b{extraBlockMembers = nel}
-    blockSetDocCommentBlock dcb b = b{extraBlockDocCommentBlock = dcb}
 
 blockLastPos :: (Block a) => a -> SourcePos
 blockLastPos b = case blockMembers b of
@@ -442,11 +439,6 @@ data BlockAttr = BlockAttr
 data Member = MemberExtraBlock ExtraBlock | MemberBlockAttr BlockAttr
     deriving (Show)
 
--- | The source position at the beginning of the member's first line.
-memberPos :: Member -> SourcePos
-memberPos (MemberBlockAttr fs) = blockAttrPos fs
-memberPos (MemberExtraBlock ex) = extraBlockHeaderPos . extraBlockExtraBlockHeader $ ex
-
 -- | The source position at the beginning of the member's final line.
 memberEndPos :: Member -> SourcePos
 memberEndPos (MemberBlockAttr fs) = blockAttrPos fs
@@ -474,6 +466,7 @@ entityHeader = do
     plus <- optional (char '+')
     en <- hspace *> L.lexeme spaceConsumer blockKey
     rest <- L.lexeme spaceConsumer (many anyToken)
+    _ <- setLastDocumentablePosition
     pure
         EntityHeader
             { entityHeaderSum = isJust plus
@@ -482,28 +475,62 @@ entityHeader = do
             , entityHeaderPos = pos
             }
 
+appendCommentToState :: (SourcePos, CommentToken) -> Parser ()
+appendCommentToState ptok = do
+    es <- get
+    let
+        comments = esPositionedCommentTokens es
+    void $ put es{esPositionedCommentTokens = comments ++ [ptok]}
+
+setLastDocumentablePosition :: Parser ()
+setLastDocumentablePosition = do
+    pos <- getSourcePos
+    es <- get
+    void $ put es{esLastDocumentablePosition = Just pos}
+
+getDcb :: Parser (Maybe DocCommentBlock)
+getDcb = do
+    es <- get
+    let
+        comments = esPositionedCommentTokens es
+    _ <- put es{esPositionedCommentTokens = []}
+    let
+        candidates = dropWhile (\(_sp, ct) -> not (isDocComment ct)) comments
+    let
+        filteredCandidates = dropWhile (commentIsIncorrectlyPositioned es) candidates
+    pure $ docCommentBlockFromPositionedTokens filteredCandidates
+  where
+    commentIsIncorrectlyPositioned
+        :: ExtraState -> (SourcePos, CommentToken) -> Bool
+    commentIsIncorrectlyPositioned es ptok = case esLastDocumentablePosition es of
+        Nothing -> False
+        Just lastDocumentablePos -> (sourceLine . fst) ptok <= sourceLine lastDocumentablePos
+
 extraBlock :: Parser Member
 extraBlock = L.indentBlock spaceConsumerN innerParser
   where
-    mkExtraBlockMember (header, blockAttrs) =
+    mkExtraBlockMember dcb (header, blockAttrs) =
         MemberExtraBlock
             ExtraBlock
                 { extraBlockExtraBlockHeader = header
                 , extraBlockMembers = ensureNonEmpty blockAttrs
-                , extraBlockDocCommentBlock = Nothing
+                , extraBlockDocCommentBlock = dcb
                 }
     ensureNonEmpty members = case NEL.nonEmpty members of
         Just nel -> nel
         Nothing -> error "unreachable" -- members is known to be non-empty
     innerParser = do
+        dcb <- getDcb
         header <- extraBlockHeader
-        pure $ L.IndentSome Nothing (return . mkExtraBlockMember . (header,)) blockAttr
+        pure $
+            L.IndentSome Nothing (return . mkExtraBlockMember dcb . (header,)) blockAttr
 
 extraBlockHeader :: Parser ExtraBlockHeader
 extraBlockHeader = do
     pos <- getSourcePos
     tn <- L.lexeme spaceConsumer blockKey
     rest <- L.lexeme spaceConsumer (many anyToken)
+    _ <- setLastDocumentablePosition
     pure $
         ExtraBlockHeader
             { extraBlockHeaderKey = tokenContent tn
@@ -513,12 +540,14 @@ extraBlockHeader = do
 
 blockAttr :: Parser Member
 blockAttr = do
+    dcb <- getDcb
     pos <- getSourcePos
     line <- some anyToken
+    _ <- setLastDocumentablePosition
     pure $
         MemberBlockAttr
             BlockAttr
-                { blockAttrDocCommentBlock = Nothing
+                { blockAttrDocCommentBlock = dcb
                 , blockAttrTokens = line
                 , blockAttrPos = pos
                 }
@@ -527,17 +556,19 @@ member :: Parser Member
 member = try extraBlock <|> blockAttr
 
 entityBlock :: Parser EntityBlock
-entityBlock = L.indentBlock spaceConsumerN innerParser
+entityBlock = do
+    L.indentBlock spaceConsumerN innerParser
   where
-    mkEntityBlock (header, members) =
+    mkEntityBlock dcb (header, members) =
         EntityBlock
             { entityBlockEntityHeader = header
             , entityBlockMembers = members
-            , entityBlockDocCommentBlock = Nothing
+            , entityBlockDocCommentBlock = dcb
             }
     innerParser = do
+        dcb <- getDcb
         header <- entityHeader
-        pure $ L.IndentMany Nothing (return . mkEntityBlock . (header,)) member
+        pure $ L.IndentMany Nothing (return . mkEntityBlock dcb . (header,)) member
 
 entitiesFromDocument :: Parser [EntityBlock]
 entitiesFromDocument = many entityBlock
@@ -562,73 +593,14 @@ docCommentBlockFromPositionedTokens ptoks =
                     , docCommentBlockPos = fst $ NEL.head nel
                     }
 
-associateCommentLines
-    :: [(SourcePos, CommentToken)] -> [EntityBlock] -> [EntityBlock]
-associateCommentLines _ [] = []
-associateCommentLines [] es = es
-associateCommentLines cls (eh : et) =
-    applyCommentLinesToBlock candidateLines eh
-        : associateCommentLines remainingLines et
-  where
-    dcLines = dropWhile (not . isDocComment . snd) cls
-    candidateLines =
-        takeWhile
-            (\(spos, _) -> sourceLine spos < sourceLine (blockLastPos eh))
-            dcLines
-    remainingLines = drop (length candidateLines) dcLines
-
--- | Accepts a list of (position, comment) pairs and associates them with the
--- block and its members.
-applyCommentLinesToBlock :: (Block a) => [(SourcePos, CommentToken)] -> a -> a
-applyCommentLinesToBlock [] a = a
-applyCommentLinesToBlock cls a = blockSetDocCommentBlock dcb $ blockSetMembers commentedMembers a
-  where
-    startLine = sourceLine $ blockFirstPos a
-    headerLines = takeWhile (\(spos, _t) -> sourceLine spos < startLine) cls
-    memberLines = dropWhile (\(spos, _t) -> sourceLine spos <= startLine) cls
-    dcb = docCommentBlockFromPositionedTokens headerLines
-    commentedMembers = associateCommentLinesWithMembers memberLines (blockMembers a)
-
-associateCommentLinesWithMembers
-    :: [(SourcePos, CommentToken)] -> [Member] -> [Member]
-associateCommentLinesWithMembers [] ms = ms
-associateCommentLinesWithMembers _ [] = []
-associateCommentLinesWithMembers cls ms@(mh : mt) = do
-    applyCommentLinesToMember candidateLines mh
-        : associateCommentLinesWithMembers remainingLines mt
-  where
-    -- we must ignore comments that share a line number with any member
-    membersLinePoses = Set.fromDistinctAscList $ fmap (sourceLine . memberPos) ms
-    filteredLines = filter (\(pos, _t) -> Set.notMember (sourceLine pos) membersLinePoses) cls
-    dcLines = dropWhile (not . isDocComment . snd) filteredLines
-    candidateLines =
-        takeWhile (\(spos, _) -> sourceLine spos < sourceLine (memberEndPos mh)) dcLines
-    remainingLines = drop (length candidateLines) dcLines
-
-applyCommentLinesToMember :: [(SourcePos, CommentToken)] -> Member -> Member
-applyCommentLinesToMember cls m = case m of
-    MemberBlockAttr a -> MemberBlockAttr $ applyCommentLinesToBlockAttr cls a
-    MemberExtraBlock b -> MemberExtraBlock $ applyCommentLinesToBlock cls b
-
-applyCommentLinesToBlockAttr
-    :: [(SourcePos, CommentToken)] -> BlockAttr -> BlockAttr
-applyCommentLinesToBlockAttr [] a = a
-applyCommentLinesToBlockAttr cls a = a{blockAttrDocCommentBlock = dcb}
-  where
-    ls =
-        takeWhile
-            (\(spos, _t) -> sourceLine spos < sourceLine (blockAttrPos a))
-            cls
-    dcb = docCommentBlockFromPositionedTokens ls
-
 parseEntities
     :: Text
     -> String
     -> ParseResult [EntityBlock]
 parseEntities fp s = do
-    (entities, comments) <-
-        runConfiguredParser [] entitiesFromDocument (Text.unpack fp) s
-    pure $ associateCommentLines comments entities
+    (entities, _comments) <-
+        runConfiguredParser initialExtraState entitiesFromDocument (Text.unpack fp) s
+    pure entities
 
 toParsedEntityDef :: Maybe SourceLoc -> EntityBlock -> ParsedEntityDef
 toParsedEntityDef mSourceLoc eb =
