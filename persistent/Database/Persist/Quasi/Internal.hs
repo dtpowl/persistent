@@ -13,6 +13,8 @@
 -- @since 2.13.0.0
 module Database.Persist.Quasi.Internal
     ( parse
+    , ParserWarning
+    , parserWarningMessage
     , PersistSettings (..)
     , upperCaseSettings
     , lowerCaseSettings
@@ -24,6 +26,7 @@ module Database.Persist.Quasi.Internal
     , takeColsEx
     , CumulativeParseResult (..)
     , renderErrors
+    , renderWarnings
 
       -- * UnboundEntityDef
     , UnboundEntityDef (..)
@@ -187,6 +190,9 @@ data PersistSettings = PersistSettings
     -- <https://github.com/yesodweb/persistent/wiki/Persistent-entity-syntax>
     --
     -- @since 2.0
+    , psParserSettings :: !ParserSettings
+    -- ^ Parser settings
+    -- @since 2.16.0.0
     }
 
 defaultPersistSettings, upperCaseSettings, lowerCaseSettings :: PersistSettings
@@ -196,6 +202,7 @@ defaultPersistSettings =
         , psToFKName = \(EntityNameHS entName) (ConstraintNameHS conName) -> entName <> conName
         , psStrictFields = True
         , psIdName = "id"
+        , psParserSettings = defaultParserSettings
         }
 upperCaseSettings = defaultPersistSettings
 lowerCaseSettings =
@@ -230,7 +237,7 @@ parse ps chunks = toCumulativeParseResult $ map parseChunk chunks
   where
     parseChunk :: (Maybe SourceLoc, Text) -> ParseResult [UnboundEntityDef]
     parseChunk (mSourceLoc, source) =
-      (fmap . fmap) (mkUnboundEntityDef ps) (parseSource mSourceLoc source)
+      (fmap . fmap) (mkUnboundEntityDef ps) <$> (parseSource (psParserSettings ps) mSourceLoc source)
 
 entityNamesFromParsedDef
     :: PersistSettings -> ParsedEntityDef -> (EntityNameHS, EntityNameDB)
