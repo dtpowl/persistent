@@ -1,6 +1,6 @@
 # Changelog for persistent
 
-# 2.16.0.0
+# 2.16.0.0 [unreleased]
 
 * [#1584](https://github.com/yesodweb/persistent/pull/1584)
     * Rename `Span` to `SourceSpan`
