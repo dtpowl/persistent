@@ -7,9 +7,7 @@
 {-# LANGUAGE TupleSections #-}
 
 module Database.Persist.Quasi.Internal.ModelParser
-    ( ParserSettings (..)
-    , defaultParserSettings
-    , SourceLoc (..)
+    ( SourceLoc (..)
     , Token (..)
     , tokenContent
     , anyToken
@@ -60,8 +58,7 @@ import Text.Megaparsec hiding (Token)
 import Text.Megaparsec.Char
 import qualified Text.Megaparsec.Char.Lexer as L
 import qualified Text.Megaparsec.Stream as TMS
-
-import Database.Persist.Quasi.ParserSettings.Internal
+import Database.Persist.Quasi.PersistSettings
 
 -- We'll augment the parser with extra state to accumulate comments seen during parsing.
 -- Comments are lexed as whitespace, but will be used to generate documentation later.
@@ -82,7 +79,7 @@ initialExtraState =
 newtype Parser a = Parser
     { unParser
         :: ReaderT
-            ParserSettings
+            PersistSettings
             ( StateT
                 ExtraState
                 ( ParsecT
@@ -102,7 +99,7 @@ newtype Parser a = Parser
         , Alternative
         , MonadPlus
         , MonadState ExtraState
-        , MonadReader ParserSettings
+        , MonadReader PersistSettings
         , MonadParsec Void String
         , MonadWriter (Set ParserWarning)
         )
@@ -129,10 +126,10 @@ toCumulativeParseResult prs = do
         ([], results) -> (warnings, Right $ fold results)
         (errs, _) -> (warnings, Left errs)
 
--- | Run a parser using provided ParserSettings and ExtraState
+-- | Run a parser using provided PersistSettings and ExtraState
 -- @since 2.16.0.0
 runConfiguredParser
-    :: ParserSettings
+    :: PersistSettings
     -> ExtraState
     -> Parser a
     -> String
@@ -321,7 +318,7 @@ validSpaceParser
     -> (Bool -> Char -> Bool)
     -> Parser ()
 validSpaceParser taker validator = do
-    tabErrorLevel <- asks parserTabErrorLevel
+    tabErrorLevel <- asks psTabErrorLevel
     void $
         tryOrReport
             tabErrorLevel
@@ -717,7 +714,7 @@ docCommentBlockFromPositionedTokens ptoks =
                     }
 
 parseEntities
-    :: ParserSettings
+    :: PersistSettings
     -> Text
     -> String
     -> ParseResult [EntityBlock]
@@ -773,7 +770,7 @@ toParsedEntityDef mSourceLoc eb =
                 }
 
 parseSource
-    :: ParserSettings
+    :: PersistSettings
     -> Maybe SourceLoc
     -> Text
     -> ParseResult [ParsedEntityDef]

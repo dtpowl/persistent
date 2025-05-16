@@ -18,7 +18,7 @@ import qualified Data.Set as Set
 import qualified Data.Text as T
 import Database.Persist.EntityDef.Internal
 import Database.Persist.Quasi
-import Database.Persist.Quasi.ParserSettings
+import Database.Persist.Quasi.PersistSettings
 import Database.Persist.Quasi.Internal
 import Database.Persist.Quasi.Internal.ModelParser
 import Database.Persist.Types
@@ -99,7 +99,7 @@ spec = describe "Quasi" $ do
         let
             tokenize :: String -> ParseResult [Token]
             tokenize s = do
-              let (warnings, res) = runConfiguredParser defaultParserSettings initialExtraState (some anyToken) "" s
+              let (warnings, res) = runConfiguredParser defaultPersistSettings initialExtraState (some anyToken) "" s
               case res of
                 Left peb ->
                   (warnings, Left peb)
@@ -291,14 +291,14 @@ spec = describe "Quasi" $ do
       let definitions = T.pack "User\n\tId Text\n\tname String"
 
       describe "when configured to permit tabs" $ do
-        let parserSettings = ParserSettings { parserTabErrorLevel = Nothing }
-            [user] = defsWithSettings lowerCaseSettings{ psParserSettings = parserSettings } definitions
+        let
+            [user] = defsWithSettings lowerCaseSettings{ psTabErrorLevel = Nothing } definitions
         it "permits tab indentation" $
           getUnboundEntityNameHS user `shouldBe` EntityNameHS "User"
 
       describe "when configured to warn on tabs" $ do
-        let parserSettings = ParserSettings { parserTabErrorLevel = Just LevelWarning }
-            (warnings, [user]) = defsWithWarnings lowerCaseSettings{ psParserSettings = parserSettings } definitions
+        let
+            (warnings, [user]) = defsWithWarnings lowerCaseSettings{ psTabErrorLevel = Just LevelWarning } definitions
         it "permits tab indentation" $
           getUnboundEntityNameHS user `shouldBe` EntityNameHS "User"
 
@@ -310,8 +310,7 @@ spec = describe "Quasi" $ do
 
       describe "when configured to disallow tabs" $ do
         let
-          parserSettings = ParserSettings { parserTabErrorLevel = Just LevelError }
-          [user] = defsWithSettings lowerCaseSettings{ psParserSettings = parserSettings } definitions
+          [user] = defsWithSettings lowerCaseSettings{ psTabErrorLevel = Just LevelError } definitions
         it "rejects tab indentation" $
           evaluate (unboundEntityDef user) `shouldErrorWithMessage` "2:1:\n  |\n2 |  Id Text\n  | ^\nunexpected tab\nexpecting valid whitespace\n\n3:1:\n  |\n3 |  name String\n  | ^\nunexpected tab\nexpecting valid whitespace\n"
 

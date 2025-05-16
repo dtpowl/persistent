@@ -131,6 +131,7 @@ import Web.HttpApiData (FromHttpApiData(..), ToHttpApiData(..))
 import Web.PathPieces (PathPiece(..))
 
 import Database.Persist
+import Database.Persist.Quasi.PersistSettings
 import Database.Persist.Class.PersistEntity
 import Database.Persist.Quasi
 import Database.Persist.Quasi.Internal
@@ -287,7 +288,7 @@ parseReferences ps s = do
   _ <- traverse_ (reportWarning . parserWarningMessage) $ warnings
   case res of
     Left errs -> fail $ renderErrors errs
-    Right res -> lift res
+    Right r -> lift r
 
 preprocessUnboundDefs
     :: [EntityDef]
@@ -1215,7 +1216,6 @@ data MkPersistSettings = MkPersistSettings
     --   , companyUserKeyUserId :: UserId
     --   }
     -- @
-
     -- Default: False
     --
     -- @since 2.14.2.0

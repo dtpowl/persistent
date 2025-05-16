@@ -925,6 +925,7 @@ module Database.Persist.Quasi
 
 import Data.Text (Text)
 import Database.Persist.Names
+import Database.Persist.Quasi.PersistSettings
 import Database.Persist.Quasi.Internal
 
 -- | Retrieve the function in the 'PersistSettings' that modifies the names into
@@ -987,3 +988,17 @@ getPsIdName = psIdName
 -- @since 2.13.0.0
 setPsIdName :: Text -> PersistSettings -> PersistSettings
 setPsIdName n ps = ps { psIdName = n }
+
+-- | Retrieve the severity of the error generated when the parser encounters a tab.
+-- If it is @Nothing@, tabs are permitted in entity definitions.
+--
+-- @since 2.16.0.0
+getPsTabErrorLevel :: PersistSettings -> Maybe ParserErrorLevel
+getPsTabErrorLevel = psTabErrorLevel
+
+-- | Set the severity of the error generated when the parser encounters a tab.
+-- If set to @Nothing@, tabs are permitted in entity definitions.
+--
+-- @since 2.16.0.0
+setPsTabErrorLevel :: Maybe ParserErrorLevel -> PersistSettings -> PersistSettings
+setPsTabErrorLevel l ps = ps { psTabErrorLevel = l }
