@@ -13,8 +13,6 @@
 -- @since 2.13.0.0
 module Database.Persist.Quasi.Internal
     ( parse
-    , ParserWarning
-    , parserWarningMessage
     , PersistSettings (..)
     , upperCaseSettings
     , lowerCaseSettings
@@ -26,7 +24,7 @@ module Database.Persist.Quasi.Internal
     , takeColsEx
     , CumulativeParseResult (..)
     , renderErrors
-    , renderWarnings
+    , parserWarningMessage
 
       -- * UnboundEntityDef
     , UnboundEntityDef (..)

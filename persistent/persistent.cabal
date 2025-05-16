@@ -82,6 +82,8 @@ library
     Database.Persist.Quasi
     Database.Persist.Quasi.Internal
     Database.Persist.Quasi.Internal.ModelParser
+    Database.Persist.Quasi.ParserSettings
+    Database.Persist.Quasi.ParserSettings.Internal
     Database.Persist.Sql
     Database.Persist.Sql.Migration
     Database.Persist.Sql.Types.Internal

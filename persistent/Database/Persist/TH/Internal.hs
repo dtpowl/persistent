@@ -118,7 +118,7 @@ import GHC.TypeLits
 import Instances.TH.Lift ()
     -- Bring `Lift (fmap k v)` instance into scope, as well as `Lift Text`
     -- instance on pre-1.2.4 versions of `text`
-import Data.Foldable (asum, toList)
+import Data.Foldable (asum, toList, traverse_)
 import qualified Data.Set as Set
 import Language.Haskell.TH.Lib
        (appT, conE, conK, conT, litT, strTyLit, varE, varP, varT)
@@ -284,7 +284,7 @@ embedEntityDefsMap existingEnts rawEnts =
 parseReferences :: PersistSettings -> [(Maybe SourceLoc, Text)] -> Q Exp
 parseReferences ps s = do
   let (warnings, res) = parse ps s
-  _ <- reportWarning $ renderWarnings warnings
+  _ <- traverse_ (reportWarning . parserWarningMessage) $ warnings
   case res of
     Left errs -> fail $ renderErrors errs
     Right res -> lift res
