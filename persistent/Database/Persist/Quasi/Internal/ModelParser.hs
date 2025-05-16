@@ -51,6 +51,7 @@ import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as Text
 import Data.Void
+import Database.Persist.Quasi.PersistSettings.Internal
 import Database.Persist.Types
 import Database.Persist.Types.SourceSpan
 import Language.Haskell.TH.Syntax (Lift)
@@ -58,7 +59,6 @@ import Text.Megaparsec hiding (Token)
 import Text.Megaparsec.Char
 import qualified Text.Megaparsec.Char.Lexer as L
 import qualified Text.Megaparsec.Stream as TMS
-import Database.Persist.Quasi.PersistSettings
 
 -- We'll augment the parser with extra state to accumulate comments seen during parsing.
 -- Comments are lexed as whitespace, but will be used to generate documentation later.
@@ -106,14 +106,11 @@ newtype Parser a = Parser
 
 type EntityParseError = ParseErrorBundle String Void
 
-type InternalParseResult a =
-    ( Set ParserWarning
-    , Either (ParseErrorBundle String Void) (a, ExtraState)
-    )
-
 -- @since 2.16.0.0
 type ParseResult a =
     (Set ParserWarning, Either (ParseErrorBundle String Void) a)
+
+type InternalParseResult a = ParseResult (a, ExtraState)
 
 type CumulativeParseResult a = (Set ParserWarning, Either [EntityParseError] a)
 
@@ -190,14 +187,15 @@ tryOrWarn msg p l r = do
                 let
                     (pairs, _) = attachSourcePos errorOffset [err] posState
                 tell . Set.fromList $
-                  map ( \(e, _pos) ->
-                          ParserWarning
-                        { parserWarningExtraMessage = msg <> "\n"
-                        , parserWarningUnderlyingError = e
-                        , parserWarningPosState = posState
-                        }
-                      )
-                  pairs
+                    map
+                        ( \(e, _pos) ->
+                            ParserWarning
+                                { parserWarningExtraMessage = msg <> "\n"
+                                , parserWarningUnderlyingError = e
+                                , parserWarningPosState = posState
+                                }
+                        )
+                        pairs
                 r
             else parseError err
 
@@ -775,8 +773,7 @@ parseSource
     -> Text
     -> ParseResult [ParsedEntityDef]
 parseSource ps mSourceLoc source =
-    case parseEntities ps filepath (Text.unpack source) of
-        (warnings, Right blocks) -> (warnings, Right (toParsedEntityDef mSourceLoc <$> blocks))
-        (warnings, Left peb) -> (warnings, Left peb)
+    fmap (fmap (toParsedEntityDef mSourceLoc))
+        <$> parseEntities ps filepath (Text.unpack source)
   where
     filepath = maybe "" locFile mSourceLoc

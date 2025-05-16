@@ -285,7 +285,7 @@ embedEntityDefsMap existingEnts rawEnts =
 parseReferences :: PersistSettings -> [(Maybe SourceLoc, Text)] -> Q Exp
 parseReferences ps s = do
   let (warnings, res) = parse ps s
-  _ <- traverse_ (reportWarning . parserWarningMessage) $ warnings
+  traverse_ (reportWarning . parserWarningMessage) $ warnings
   case res of
     Left errs -> fail $ renderErrors errs
     Right r -> lift r

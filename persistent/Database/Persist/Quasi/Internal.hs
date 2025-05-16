@@ -16,7 +16,6 @@ module Database.Persist.Quasi.Internal
     , PersistSettings (..)
     , upperCaseSettings
     , lowerCaseSettings
-    , toFKNameInfixed
     , Token (..)
     , SourceLoc (..)
     , sourceLocFromTHLoc
@@ -63,6 +62,11 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import Database.Persist.EntityDef.Internal
 import Database.Persist.Quasi.PersistSettings
+import Database.Persist.Quasi.PersistSettings.Internal ( psToFKName
+                                                       , psToDBName
+                                                       , psIdName
+                                                       , psStrictFields
+                                                       )
 import Database.Persist.Quasi.Internal.ModelParser
 import Database.Persist.Types
 import Database.Persist.Types.Base
@@ -171,10 +175,6 @@ parseFieldTypePiece fstChar rest =
                     ("", _) -> FTTypeCon Nothing t
                     (a, b) -> FTTypeCon (Just $ T.init a) b
 
-toFKNameInfixed :: Text -> EntityNameHS -> ConstraintNameHS -> Text
-toFKNameInfixed inf (EntityNameHS entName) (ConstraintNameHS conName) =
-    entName <> inf <> conName
-
 sourceLocFromTHLoc :: Loc -> SourceLoc
 sourceLocFromTHLoc Loc{loc_filename = filename, loc_start = start} =
     SourceLoc
@@ -192,7 +192,7 @@ parse ps chunks = toCumulativeParseResult $ map parseChunk chunks
   where
     parseChunk :: (Maybe SourceLoc, Text) -> ParseResult [UnboundEntityDef]
     parseChunk (mSourceLoc, source) =
-      (fmap . fmap) (mkUnboundEntityDef ps) <$> (parseSource ps mSourceLoc source)
+      (fmap . fmap) (mkUnboundEntityDef ps) <$> parseSource ps mSourceLoc source
 
 entityNamesFromParsedDef
     :: PersistSettings -> ParsedEntityDef -> (EntityNameHS, EntityNameDB)

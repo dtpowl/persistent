@@ -19,6 +19,7 @@ import qualified Data.Text as T
 import Database.Persist.EntityDef.Internal
 import Database.Persist.Quasi
 import Database.Persist.Quasi.PersistSettings
+import Database.Persist.Quasi.PersistSettings.Internal (psTabErrorLevel)
 import Database.Persist.Quasi.Internal
 import Database.Persist.Quasi.Internal.ModelParser
 import Database.Persist.Types
