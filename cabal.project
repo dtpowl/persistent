@@ -8,9 +8,9 @@ packages:
     persistent-redis
     persistent-qq
 
--- required by nix.
-package postgresql-libpq
-    flags: +use-pkg-config
+-- required by nix but breaks macOS cabal builds:
+--package postgresql-libpq
+--    flags: +use-pkg-config
 
 allow-newer:
     -- https://github.com/fizruk/http-api-data/pull/146
