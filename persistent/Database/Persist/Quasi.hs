@@ -919,7 +919,7 @@ module Database.Persist.Quasi
     , PersistSettings
     , upperCaseSettings
     , lowerCaseSettings
-    -- ** 'PersistSettings' Getters and Setters
+    -- ** Getters and Setters
     , getPsToDBName
     , setPsToDBName
     , setPsToFKName

@@ -8,7 +8,7 @@ module Database.Persist.Quasi.PersistSettings
     , warningPos
     , parserWarningMessage
 
-      -- ** 'PersistSettings' Getters and Setters
+      -- ** Getters and Setters
     , getPsToDBName
     , setPsToDBName
     , setPsToFKName

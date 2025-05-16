@@ -61,9 +61,13 @@ lowerCaseSettings =
                 T.dropWhile (== '_') . T.concatMap go
         }
 
+-- |
+--
 -- @since 2.16.0.0
 data ParserErrorLevel = LevelError | LevelWarning deriving (Eq, Show)
 
+-- |
+--
 -- @since 2.16.0.0
 data ParserWarning = ParserWarning
     { parserWarningExtraMessage :: String
@@ -81,6 +85,8 @@ instance Ord ParserWarning where
             then parserWarningMessage l <= parserWarningMessage r
             else warningPos l <= warningPos r
 
+-- | Uses @errorBundlePretty@ to render a parser warning.
+--
 -- @since 2.16.0.0
 parserWarningMessage :: ParserWarning -> String
 parserWarningMessage pw =
@@ -126,7 +132,7 @@ setPsToFKName setter ps = ps{psToFKName = setter}
 setPsUseSnakeCaseForeignKeys :: PersistSettings -> PersistSettings
 setPsUseSnakeCaseForeignKeys = setPsToFKName (toFKNameInfixed "_")
 
--- Equivalent to 'setPsUseSnakeCaseForeignKeys', but misspelled.
+-- | Equivalent to 'setPsUseSnakeCaseForeignKeys', but misspelled.
 --
 -- @since 2.13.0.0
 setPsUseSnakeCaseForiegnKeys :: PersistSettings -> PersistSettings
