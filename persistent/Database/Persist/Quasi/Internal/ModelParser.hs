@@ -5,6 +5,7 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TupleSections #-}
+{-# LANGUAGE CPP #-}
 
 module Database.Persist.Quasi.Internal.ModelParser
     ( SourceLoc (..)
@@ -75,7 +76,11 @@ initialExtraState =
         , esLastDocumentablePosition = Nothing
         }
 
--- @since 2.16.0.0
+-- megaparsec <9.5 lacks a MonadWriter instance for ParsecT.
+-- We must continue supporting megaparsec <9.5 in order to support
+-- GHC <9, so we will work around this by disabling warning functionality
+-- on old megaparsecs.
+#if MIN_VERSION_megaparsec(9,5,0)
 newtype Parser a = Parser
     { unParser
         :: ReaderT
@@ -103,6 +108,31 @@ newtype Parser a = Parser
         , MonadParsec Void String
         , MonadWriter (Set ParserWarning)
         )
+#else
+newtype Parser a = Parser
+    { unParser
+        :: ReaderT
+            PersistSettings
+            ( StateT
+                ExtraState
+                ( Parsec
+                    Void
+                    String
+                )
+            )
+            a
+    }
+    deriving newtype
+        ( Functor
+        , Applicative
+        , Monad
+        , Alternative
+        , MonadPlus
+        , MonadState ExtraState
+        , MonadReader PersistSettings
+        , MonadParsec Void String
+        )
+#endif
 
 type EntityParseError = ParseErrorBundle String Void
 
@@ -139,10 +169,16 @@ runConfiguredParser
     -> InternalParseResult a
 runConfiguredParser ps acc parser fp s = (warnings, either)
   where
+#if MIN_VERSION_megaparsec(9,5,0)
     sm = runReaderT (unParser parser) ps
     pm = runStateT sm acc
     wm = runParserT' pm initialInternalState
     ((_is, either), warnings) = runWriter wm
+#else
+    sm = runReaderT (unParser parser) ps
+    pm = runStateT sm acc
+    ((_is, either), warnings) = (runParser' pm initialInternalState, mempty)
+#endif
 
     initialSourcePos =
         SourcePos
@@ -186,23 +222,25 @@ tryOrWarn msg p l r = do
     parserState <- getParserState
     withRecovery (warnAndRetry $ statePosState parserState) l
   where
-    warnAndRetry posState err = do
-        if p err
-            then do
-                let
-                    (pairs, _) = attachSourcePos errorOffset [err] posState
-                tell . Set.fromList $
-                    map
-                        ( \(e, _pos) ->
-                            ParserWarning
-                                { parserWarningExtraMessage = msg <> "\n"
-                                , parserWarningUnderlyingError = e
-                                , parserWarningPosState = posState
-                                }
-                        )
-                        pairs
-                r
-            else parseError err
+    warnAndRetry posState err =
+        if not (p err)
+        then parseError err
+        else do
+#if MIN_VERSION_megaparsec(9,5,0)
+            let
+              (pairs, _) = attachSourcePos errorOffset [err] posState
+            tell . Set.fromList $
+                map
+                    ( \(e, _pos) ->
+                        ParserWarning
+                            { parserWarningExtraMessage = msg <> "\n"
+                            , parserWarningUnderlyingError = e
+                            , parserWarningPosState = posState
+                            }
+                    )
+                    pairs
+#endif
+            r
 
 -- | Attempts to parse with a provided parser. If it fails with an error matching
 -- the provided predicate, it registers a delayed error with the provided message and falls

@@ -5,6 +5,7 @@ module Database.Persist.Quasi.PersistSettings
     , lowerCaseSettings
     , ParserErrorLevel (..)
     , ParserWarning
+    , unableToReportConfiguredWarnings
     , warningPos
     , parserWarningMessage
 

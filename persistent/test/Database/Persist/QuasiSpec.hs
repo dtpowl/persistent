@@ -9,8 +9,6 @@ import Prelude hiding (lines)
 
 import Control.Exception
 import Data.Bifunctor
-import Data.List hiding (lines)
-import Data.List.NonEmpty (NonEmpty (..), (<|))
 import qualified Data.List.NonEmpty as NEL
 import qualified Data.Map as Map
 import Data.Set (Set)
@@ -24,10 +22,9 @@ import Database.Persist.Quasi.Internal
 import Database.Persist.Quasi.Internal.ModelParser
 import Database.Persist.Types
 import Test.Hspec
-import Test.Hspec.QuickCheck
 import Test.QuickCheck
 import Text.Shakespeare.Text (st)
-import Text.Megaparsec (errorBundlePretty, runParser, some)
+import Text.Megaparsec (errorBundlePretty, some)
 
 defs :: T.Text -> [UnboundEntityDef]
 defs = defsWithSettings lowerCaseSettings
@@ -303,11 +300,13 @@ spec = describe "Quasi" $ do
         it "permits tab indentation" $
           getUnboundEntityNameHS user `shouldBe` EntityNameHS "User"
 
+#if MIN_VERSION_megaparsec(9,5,0)
         it "generates warnings" $
           Set.map parserWarningMessage warnings
           `shouldBe` [ "use spaces instead of tabs\n2:1:\n  |\n2 |  Id Text\n  | ^\nunexpected tab\nexpecting valid whitespace\n"
                      , "use spaces instead of tabs\n3:1:\n  |\n3 |  name String\n  | ^\nunexpected tab\nexpecting valid whitespace\n"
                      ]
+#endif
 
       describe "when configured to disallow tabs" $ do
         let

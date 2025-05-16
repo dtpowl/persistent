@@ -1,3 +1,5 @@
+{-# LANGUAGE CPP #-}
+
 module Database.Persist.Quasi.PersistSettings.Internal where
 
 import Data.Char (isDigit, isLower, isSpace, isUpper, toLower)
@@ -97,6 +99,13 @@ parserWarningMessage pw =
                     , bundlePosState = parserWarningPosState pw
                     }
            )
+
+unableToReportConfiguredWarnings :: PersistSettings -> Bool
+#if MIN_VERSION_megaparsec(9,5,0)
+unableToReportConfiguredWarnings _ps = False
+#else
+unableToReportConfiguredWarnings = (Just LevelWarning ==) . psTabErrorLevel
+#endif
 
 toFKNameInfixed :: Text -> EntityNameHS -> ConstraintNameHS -> Text
 toFKNameInfixed inf (EntityNameHS entName) (ConstraintNameHS conName) =

@@ -285,7 +285,15 @@ embedEntityDefsMap existingEnts rawEnts =
 parseReferences :: PersistSettings -> [(Maybe SourceLoc, Text)] -> Q Exp
 parseReferences ps s = do
   let (warnings, res) = parse ps s
-  traverse_ (reportWarning . parserWarningMessage) $ warnings
+  if unableToReportConfiguredWarnings ps
+  then
+      reportWarning $ unlines
+                [ "At least one quasiquoter warning has been enabled, but these warnings cannot be reported."
+                , "Please upgrade to megaparsec >= 9.5 to enable warning reports."
+                , "Support for megaparsec < 9.5 will eventually be removed."
+                ]
+  else
+      traverse_ (reportWarning . parserWarningMessage) $ warnings
   case res of
     Left errs -> fail $ renderErrors errs
     Right r -> lift r
