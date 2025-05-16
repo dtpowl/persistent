@@ -5,6 +5,7 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TupleSections #-}
+{-# LANGUAGE CPP #-}
 
 module Database.Persist.Quasi.Internal.ModelParser
     ( SourceLoc (..)
@@ -75,7 +76,6 @@ initialExtraState =
         , esLastDocumentablePosition = Nothing
         }
 
--- @since 2.16.0.0
 newtype Parser a = Parser
     { unParser
         :: ReaderT
@@ -101,7 +101,6 @@ newtype Parser a = Parser
         , MonadState ExtraState
         , MonadReader PersistSettings
         , MonadParsec Void String
-        , MonadWriter (Set ParserWarning)
         )
 
 type EntityParseError = ParseErrorBundle String Void
@@ -167,6 +166,13 @@ runConfiguredParser ps acc parser fp s = (warnings, either)
             , stateParseErrors = []
             }
 
+reportWarnings :: Set ParserWarning -> Parser ()
+#if MIN_VERSION_megaparsec(9,5,0)
+reportWarnings = Parser . tell
+#else
+reportWarnings _pw = pure ()
+#endif
+
 -- | Renders a list of EntityParseErrors as a String using `errorBundlePretty`,
 -- separated by line breaks.
 -- @since 2.16.0.0
@@ -191,7 +197,7 @@ tryOrWarn msg p l r = do
             then do
                 let
                     (pairs, _) = attachSourcePos errorOffset [err] posState
-                tell . Set.fromList $
+                reportWarnings . Set.fromList $
                     map
                         ( \(e, _pos) ->
                             ParserWarning

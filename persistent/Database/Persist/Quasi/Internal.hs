@@ -21,7 +21,7 @@ module Database.Persist.Quasi.Internal
     , sourceLocFromTHLoc
     , parseFieldType
     , takeColsEx
-    , CumulativeParseResult (..)
+    , CumulativeParseResult
     , renderErrors
     , parserWarningMessage
 
