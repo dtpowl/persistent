@@ -106,12 +106,17 @@ newtype Parser a = Parser
 
 type EntityParseError = ParseErrorBundle String Void
 
+-- | Result of parsing a single source text.
+--
 -- @since 2.16.0.0
 type ParseResult a =
     (Set ParserWarning, Either (ParseErrorBundle String Void) a)
 
 type InternalParseResult a = ParseResult (a, ExtraState)
 
+-- | Cumulative result of parsing multiple source texts.
+--
+-- @since 2.16.0.0
 type CumulativeParseResult a = (Set ParserWarning, Either [EntityParseError] a)
 
 toCumulativeParseResult
