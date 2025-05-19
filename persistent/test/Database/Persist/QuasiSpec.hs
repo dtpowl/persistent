@@ -42,6 +42,24 @@ defsWithWarnings ps t = case cpr of
 defsWithSettings :: PersistSettings -> T.Text -> [UnboundEntityDef]
 defsWithSettings ps t = snd $ defsWithWarnings ps t
 
+#if MIN_VERSION_megaparsec(9,5,0)
+warningSpecs :: Spec
+warningSpecs =
+  describe "Quasi" $ do
+      describe "parser settings" $ do
+          let
+              definitions = T.pack "User\n\tId Text\n\tname String"
+              (warnings, [user]) = defsWithWarnings lowerCaseSettings{ psTabErrorLevel = Just LevelWarning } definitions
+          it "generates warnings" $ do
+            Set.map parserWarningMessage warnings
+              `shouldBe` [ "use spaces instead of tabs\n2:1:\n  |\n2 |  Id Text\n  | ^\nunexpected tab\nexpecting valid whitespace\n"
+                         , "use spaces instead of tabs\n3:1:\n  |\n3 |  name String\n  | ^\nunexpected tab\nexpecting valid whitespace\n"
+                         ]
+#else
+warningSpecs :: Spec
+warningSpecs = pure ()
+#endif
+
 spec :: Spec
 spec = describe "Quasi" $ do
     describe "takeColsEx" $ do
@@ -299,14 +317,6 @@ spec = describe "Quasi" $ do
             (warnings, [user]) = defsWithWarnings lowerCaseSettings{ psTabErrorLevel = Just LevelWarning } definitions
         it "permits tab indentation" $
           getUnboundEntityNameHS user `shouldBe` EntityNameHS "User"
-
-#if MIN_VERSION_megaparsec(9,5,0)
-        it "generates warnings" $
-          Set.map parserWarningMessage warnings
-          `shouldBe` [ "use spaces instead of tabs\n2:1:\n  |\n2 |  Id Text\n  | ^\nunexpected tab\nexpecting valid whitespace\n"
-                     , "use spaces instead of tabs\n3:1:\n  |\n3 |  name String\n  | ^\nunexpected tab\nexpecting valid whitespace\n"
-                     ]
-#endif
 
       describe "when configured to disallow tabs" $ do
         let
