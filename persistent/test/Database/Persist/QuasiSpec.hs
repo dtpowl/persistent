@@ -391,6 +391,21 @@ Car
                          ]
             (simplifyUnique <$> entityUniques (unboundEntityDef vehicle)) `shouldBe` []
 
+        it "should not parse loose strings" $ do
+            let [precompiledCacheParent] = defs [st|
+                                                   PrecompiledCacheParent sql="precompiled_cache"
+                                                   platformGhcDir FilePath "default=(hex(randomblob(16)))"
+                                                   compiler Text
+                                                   cabalVersion Text
+                                                   packageKey Text
+                                                   optionsHash ByteString
+                                                   haddock Bool default=0
+                                                   library FilePath Maybe
+                                                   UniquePrecompiledCacheParent platformGhcDir compiler cabalVersion packageKey optionsHash haddock sql="unique_precompiled_cache"
+                                                   deriving Show
+                                                |]
+            evaluate (unboundEntityDef precompiledCacheParent) `shouldErrorWithMessage` "something\n"
+
         it "should parse the `entityForeigns` field" $ do
             let
                 [user, notification] =
