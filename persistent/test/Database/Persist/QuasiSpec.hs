@@ -115,7 +115,8 @@ spec = describe "Quasi" $ do
         let
             tokenize :: String -> ParseResult [Token]
             tokenize s = do
-              let (warnings, res) = runConfiguredParser defaultPersistSettings initialExtraState (some anyToken) "" s
+              let
+                (warnings, res) = runConfiguredParser defaultPersistSettings initialExtraState (some feature) "" s
               case res of
                 Left peb ->
                   (warnings, Left peb)
@@ -141,10 +142,10 @@ spec = describe "Quasi" $ do
                            )
 
         it "handles quotes" $
-            tokenize "\"foo bar\" \"baz\""
+            tokenize "abc=\"foo bar\" def=\"baz\""
                 `shouldBe` ([], Right
-                             ( [ Quotation "foo bar"
-                               , Quotation "baz"
+                             ( [ Equality "abc" "foo bar"
+                               , Equality "def" "baz"
                                ]
                              )
                            )
@@ -166,34 +167,34 @@ spec = describe "Quasi" $ do
         it "should error if quotes are unterminated" $ do
           (fmap . first) errorBundlePretty (tokenize "\"foo bar")
                 `shouldBe` ([], Left
-                             ( "1:9:\n  |\n1 | \"foo bar\n  |         ^\nunexpected end of input\nexpecting '\"' or literal character\n"
+                             ( "1:5:\n  |\n1 | \"foo bar\n  |     ^\nunexpected space\nexpecting '!', '\"', ''', ',', '-', '.', ':', '=', '[', '\\', ']', '_', '~', or alphanumeric character\n"
                              )
                            )
 
         it "handles commas in tokens" $
-            tokenize "x=COALESCE(left,right)  \"baz\""
+            tokenize "x=COALESCE(left,right)  baz"
                 `shouldBe` ([], Right
                              ( [ Equality "x" "COALESCE(left,right)"
-                               , Quotation "baz"
+                               , PText "baz"
                                ]
                              )
                            )
 
         it "handles quotes mid-token" $
-            tokenize "x=\"foo bar\"  \"baz\""
+            tokenize "x=\"foo bar\"  baz"
                 `shouldBe` ([], Right
                              ( [ Equality "x" "foo bar"
-                               , Quotation "baz"
+                               , PText "baz"
                                ]
                              )
                            )
 
         it "handles escaped quotes mid-token" $
-            tokenize "x=\\\"foo bar\"  \"baz\""
+            tokenize "x=\\\"foo bar\"  baz"
                 `shouldBe` ([], Right
                              ( [ Equality "x" "\\\"foo"
                                , PText "bar\""
-                               , Quotation "baz"
+                               , PText "baz"
                                ]
                              )
                            )
@@ -235,10 +236,10 @@ spec = describe "Quasi" $ do
                            )
 
         it "handles escaped quotation marks in quotations" $
-            tokenize "foo \"bar\\\"baz\""
+            tokenize "foo bar=\"baz\\\"quux\""
                 `shouldBe` ([], Right
                              ( [ PText "foo"
-                               , Quotation "bar\"baz"
+                               , Equality "bar" "baz\"quux"
                                ]
                              )
                            )
@@ -260,10 +261,10 @@ spec = describe "Quasi" $ do
                            )
 
         it "handles escaped parentheses in quotations" $
-            tokenize "foo \"bar\\(baz\""
+            tokenize "foo bar=\"baz\\(quux\""
                 `shouldBe` ([], Right
                              ( [ PText "foo"
-                               , Quotation "bar(baz"
+                               , Equality "bar" "baz(quux"
                                ]
                              )
                            )
@@ -391,20 +392,28 @@ Car
                          ]
             (simplifyUnique <$> entityUniques (unboundEntityDef vehicle)) `shouldBe` []
 
-        it "should not parse loose strings" $ do
+        it "should not parse loose strings in entity block attributes" $ do
             let [precompiledCacheParent] = defs [st|
                                                    PrecompiledCacheParent sql="precompiled_cache"
-                                                   platformGhcDir FilePath "default=(hex(randomblob(16)))"
-                                                   compiler Text
-                                                   cabalVersion Text
-                                                   packageKey Text
-                                                   optionsHash ByteString
-                                                   haddock Bool default=0
-                                                   library FilePath Maybe
-                                                   UniquePrecompiledCacheParent platformGhcDir compiler cabalVersion packageKey optionsHash haddock sql="unique_precompiled_cache"
-                                                   deriving Show
+                                                     platformGhcDir FilePath "default=(hex(randomblob(16)))"
+                                                     compiler Text
+                                                     cabalVersion Text
+                                                     packageKey Text
+                                                     optionsHash ByteString
+                                                     haddock Bool default=0
+                                                     library FilePath Maybe
+                                                     UniquePrecompiledCacheParent platformGhcDir compiler cabalVersion packageKey optionsHash haddock sql="unique_precompiled_cache"
+                                                     deriving Show
                                                 |]
-            evaluate (unboundEntityDef precompiledCacheParent) `shouldErrorWithMessage` "something\n"
+            evaluate (unboundEntityDef precompiledCacheParent) `shouldErrorWithMessage` "3:108:\n  |\n3 |                                                      platformGhcDir FilePath \"default=(hex(randomblob(16)))\"\n  |                                                                                                            ^\nunexpected '\"'\nexpecting end of input or newline\n"
+
+        it "should parse entity block attributes with nested parens on equality rhs" $ do
+            let [precompiledCacheParent] = defs [st|
+                                                   PrecompiledCacheParent sql="precompiled_cache"
+                                                     platformGhcDir FilePath default=(hex(randomblob(16)))
+                                                |]
+            (unboundFieldAttrs <$> unboundEntityFields precompiledCacheParent)
+                `shouldBe` [[FieldAttrDefault "hex(randomblob(16))"]]
 
         it "should parse the `entityForeigns` field" $ do
             let

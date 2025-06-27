@@ -10,8 +10,8 @@
 module Database.Persist.Quasi.Internal.ModelParser
     ( SourceLoc (..)
     , Token (..)
+    , feature
     , tokenContent
-    , anyToken
     , ParsedEntityDef
     , parsedEntityDefComments
     , parsedEntityDefEntityName
@@ -260,8 +260,7 @@ data SourceLoc = SourceLoc
 
 -- @since 2.16.0.0
 data Token
-    = Quotation Text
-    | Equality Text Text
+    = Equality Text Text
     | Parenthetical Text
     | BlockKey Text
     | PText Text
@@ -278,7 +277,6 @@ data CommentToken
 -- @since 2.16.0.0
 tokenContent :: Token -> Text
 tokenContent = \case
-    Quotation s -> s
     Equality l r -> mconcat [l, "=", r]
     Parenthetical s -> s
     PText s -> s
@@ -415,7 +413,7 @@ equality = label "equality expression" $ do
         _ <- char '='
         rhs <-
             choice
-                [ quotation'
+                [ quotation
                 , sqlLiteral
                 , parentheticalInner
                 , some $ contentChar <|> char '(' <|> char ')'
@@ -449,13 +447,8 @@ sqlLiteral = label "SQL literal" $ do
             , fromMaybe "" st
             ]
 
-quotation :: Parser Token
-quotation = label "quotation" $ do
-    str <- L.lexeme spaceConsumer quotation'
-    pure . Quotation $ Text.pack str
-
-quotation' :: Parser String
-quotation' = char '"' *> manyTill charLiteral (char '"')
+quotation :: Parser String
+quotation = char '"' *> manyTill charLiteral (char '"')
 
 parenthetical :: Parser Token
 parenthetical = label "parenthetical" $ do
@@ -478,15 +471,25 @@ blockKey = label "block key" $ do
 
 ptext :: Parser Token
 ptext = label "plain token" $ do
-    str <- L.lexeme spaceConsumer $ some contentChar
+    str <- L.lexeme spaceConsumer $ do
+      first <- initialChar
+      rest <- many contentChar
+      pure (first : rest)
     pure . PText . Text.pack $ str
+  where
+    initialChar :: Parser Char
+    initialChar = choice [ alphaNumChar
+                         , char '['
+                         , char '!'
+                         , char '~'
+                         ]
 
--- @since 2.16.0.0
-anyToken :: Parser Token
-anyToken =
+-- | Parses a feature of a block attribute,
+-- of an entity block header, or of an extra block header.
+feature :: Parser Token
+feature =
     choice
         [ try equality
-        , quotation
         , parenthetical
         , ptext
         ]
@@ -595,7 +598,7 @@ entityHeader = do
     pos <- getSourcePos
     plus <- optional (char '+')
     en <- validHSpace *> L.lexeme spaceConsumer blockKey
-    rest <- L.lexeme spaceConsumer (many anyToken)
+    rest <- L.lexeme spaceConsumer (many feature)
     _ <- setLastDocumentablePosition
     pure
         EntityHeader
@@ -658,7 +661,7 @@ extraBlockHeader :: Parser ExtraBlockHeader
 extraBlockHeader = do
     pos <- getSourcePos
     tn <- L.lexeme spaceConsumer blockKey
-    rest <- L.lexeme spaceConsumer (many anyToken)
+    rest <- L.lexeme spaceConsumer (many feature)
     _ <- setLastDocumentablePosition
     pure $
         ExtraBlockHeader
@@ -671,8 +674,9 @@ blockAttr :: Parser Member
 blockAttr = do
     dcb <- getDcb
     pos <- getSourcePos
-    line <- some anyToken
+    line <- some feature
     _ <- setLastDocumentablePosition
+    lookAhead (void newline <|> eof)
     pure $
         MemberBlockAttr
             BlockAttr
