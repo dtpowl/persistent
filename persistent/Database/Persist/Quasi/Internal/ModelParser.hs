@@ -1,8 +1,11 @@
 {-# LANGUAGE DeriveLift #-}
+{-# LANGUAGE DerivingStrategies #-}
 {-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TupleSections #-}
+{-# LANGUAGE CPP #-}
 
 module Database.Persist.Quasi.Internal.ModelParser
     ( SourceLoc (..)
@@ -19,32 +22,44 @@ module Database.Persist.Quasi.Internal.ModelParser
     , parsedEntityDefSpan
     , parseSource
     , memberBlockAttrs
+    , ParserWarning
+    , parserWarningMessage
     , ParseResult
     , CumulativeParseResult
     , toCumulativeParseResult
     , renderErrors
     , runConfiguredParser
+    , ParserErrorLevel (..)
     , initialExtraState
     ) where
 
-import Control.Monad (void)
-import Control.Monad.Trans.State
+import Control.Applicative (Alternative)
+import Control.Monad (MonadPlus, mzero, void)
+import Control.Monad.Reader (MonadReader, ReaderT, asks, runReaderT)
+import Control.Monad.State
+import Control.Monad.Writer
+import Data.Char (isSpace)
 import Data.Either (partitionEithers)
 import Data.Foldable (fold)
-import Data.List (intercalate)
+import Data.Functor.Identity
+import Data.List (find, intercalate)
 import Data.List.NonEmpty (NonEmpty (..))
 import qualified Data.List.NonEmpty as NEL
 import qualified Data.Map as M
 import Data.Maybe
+import Data.Set (Set)
+import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as Text
 import Data.Void
+import Database.Persist.Quasi.PersistSettings.Internal
 import Database.Persist.Types
 import Database.Persist.Types.SourceSpan
 import Language.Haskell.TH.Syntax (Lift)
 import Text.Megaparsec hiding (Token)
 import Text.Megaparsec.Char
 import qualified Text.Megaparsec.Char.Lexer as L
+import qualified Text.Megaparsec.Stream as TMS
 
 -- We'll augment the parser with extra state to accumulate comments seen during parsing.
 -- Comments are lexed as whitespace, but will be used to generate documentation later.
@@ -53,7 +68,7 @@ data ExtraState = ExtraState
     , esLastDocumentablePosition :: Maybe SourcePos
     }
 
--- @since 2.16.1.0
+-- @since 2.16.0.0
 initialExtraState :: ExtraState
 initialExtraState =
     ExtraState
@@ -61,29 +76,73 @@ initialExtraState =
         , esLastDocumentablePosition = Nothing
         }
 
-type Parser a =
-    StateT
-        ExtraState
-        (Parsec Void String)
-        a
+newtype Parser a = Parser
+    { unParser
+        :: ReaderT
+            PersistSettings
+            ( StateT
+                ExtraState
+                ( ParsecT
+                    Void
+                    String
+                    ( Writer
+                        (Set ParserWarning)
+                    )
+                )
+            )
+            a
+    }
+    deriving newtype
+        ( Functor
+        , Applicative
+        , Monad
+        , Alternative
+        , MonadPlus
+        , MonadState ExtraState
+        , MonadReader PersistSettings
+        , MonadParsec Void String
+        )
 
 type EntityParseError = ParseErrorBundle String Void
-type InternalParseResult a = Either EntityParseError (a, ExtraState)
 
-type ParseResult a = Either EntityParseError a
-type CumulativeParseResult a = Either [EntityParseError] a
+-- | Result of parsing a single source text.
+--
+-- @since 2.16.0.0
+type ParseResult a =
+    (Set ParserWarning, Either (ParseErrorBundle String Void) a)
 
--- | Run a parser using a provided ExtraState
+type InternalParseResult a = ParseResult (a, ExtraState)
+
+-- | Cumulative result of parsing multiple source texts.
+--
+-- @since 2.16.0.0
+type CumulativeParseResult a = (Set ParserWarning, Either [EntityParseError] a)
+
+toCumulativeParseResult
+    :: (Monoid a) => [ParseResult a] -> CumulativeParseResult a
+toCumulativeParseResult prs = do
+    let
+        (warnings, eithers) = sequence prs
+    case partitionEithers eithers of
+        ([], results) -> (warnings, Right $ fold results)
+        (errs, _) -> (warnings, Left errs)
+
+-- | Run a parser using provided PersistSettings and ExtraState
 -- @since 2.16.0.0
 runConfiguredParser
-    :: ExtraState
+    :: PersistSettings
+    -> ExtraState
     -> Parser a
     -> String
     -> String
     -> InternalParseResult a
-runConfiguredParser acc parser fp s = parseResult
+runConfiguredParser ps acc parser fp s = (warnings, either)
   where
-    (_internalState, parseResult) = runParser' (runStateT parser acc) initialInternalState
+    sm = runReaderT (unParser parser) ps
+    pm = runStateT sm acc
+    wm = runParserT' pm initialInternalState
+    ((_is, either), warnings) = runWriter wm
+
     initialSourcePos =
         SourcePos
             { sourceName = fp
@@ -107,17 +166,87 @@ runConfiguredParser acc parser fp s = parseResult
             , stateParseErrors = []
             }
 
+reportWarnings :: Set ParserWarning -> Parser ()
+#if MIN_VERSION_megaparsec(9,5,0)
+reportWarnings = Parser . tell
+#else
+reportWarnings _pw = pure ()
+#endif
+
 -- | Renders a list of EntityParseErrors as a String using `errorBundlePretty`,
 -- separated by line breaks.
 -- @since 2.16.0.0
 renderErrors :: [EntityParseError] -> String
 renderErrors errs = intercalate "\n" $ fmap errorBundlePretty errs
 
-toCumulativeParseResult
-    :: (Monoid a) => [ParseResult a] -> CumulativeParseResult a
-toCumulativeParseResult prs = case partitionEithers prs of
-    ([], results) -> Right $ fold results
-    (errs, _) -> Left errs
+-- | Attempts to parse with a provided parser. If it fails with an error matching
+-- the provided predicate, it registers a warning with the provided message and falls
+-- back to the second provided parser.
+tryOrWarn
+    :: String
+    -> (ParseError String Void -> Bool)
+    -> Parser a
+    -> Parser a
+    -> Parser a
+tryOrWarn msg p l r = do
+    parserState <- getParserState
+    withRecovery (warnAndRetry $ statePosState parserState) l
+  where
+    warnAndRetry posState err = do
+        if p err
+            then do
+                let
+                    (pairs, _) = attachSourcePos errorOffset [err] posState
+                reportWarnings . Set.fromList $
+                    map
+                        ( \(e, _pos) ->
+                            ParserWarning
+                                { parserWarningExtraMessage = msg <> "\n"
+                                , parserWarningUnderlyingError = e
+                                , parserWarningPosState = posState
+                                }
+                        )
+                        pairs
+                r
+            else parseError err
+
+-- | Attempts to parse with a provided parser. If it fails with an error matching
+-- the provided predicate, it registers a delayed error with the provided message and falls
+-- back to the second provided parser.
+--
+-- This is useful when registering errors in space consumers and other parsers that are called
+-- with `try`, since a non-delayed error in this context will cause backtracking and not
+-- get reported to the user.
+tryOrRegisterError
+    :: String
+    -> (ParseError String Void -> Bool)
+    -> Parser a
+    -> Parser a
+    -> Parser a
+tryOrRegisterError msg p l r = do
+    parserState <- getParserState
+    withRecovery (delayedError $ statePosState parserState) l
+  where
+    delayedError posState err = do
+        if p err
+            then do
+                let
+                    (pairs, _) = attachSourcePos errorOffset [err] posState
+                registerParseError err
+                r
+            else parseError err
+
+tryOrReport
+    :: Maybe ParserErrorLevel
+    -> String
+    -> (ParseError String Void -> Bool)
+    -> Parser a
+    -> Parser a
+    -> Parser a
+tryOrReport level msg p l r = case level of
+    Just LevelError -> tryOrRegisterError msg p l r
+    Just LevelWarning -> tryOrWarn msg p l r
+    Nothing -> r
 
 -- | Source location: file and line/col information. This is half of a 'SourceSpan'.
 --
@@ -163,7 +292,8 @@ commentContent = \case
 docComment :: Parser (SourcePos, CommentToken)
 docComment = do
     pos <- getSourcePos
-    content <- string "-- |" *> hspace *> takeWhileP (Just "character") (/= '\n')
+    content <-
+        string "-- |" *> validHSpace *> takeWhileP (Just "character") (/= '\n')
     pure (pos, DocComment (Text.pack content))
 
 comment :: Parser (SourcePos, CommentToken)
@@ -171,7 +301,7 @@ comment = do
     pos <- getSourcePos
     content <-
         (string "--" <|> string "#")
-            *> hspace
+            *> validHSpace
             *> takeWhileP (Just "character") (/= '\n')
     pure (pos, Comment (Text.pack content))
 
@@ -180,17 +310,58 @@ skipComment = do
     content <- docComment <|> comment
     void $ appendCommentToState content
 
+isValidHSpace :: Bool -> Char -> Bool
+isValidHSpace allowTabs c =
+    if allowTabs
+        then isSpace c && c /= '\n'
+        else isSpace c && c /= '\n' && c /= '\t'
+
+isValidSpace :: Bool -> Char -> Bool
+isValidSpace allowTabs c =
+    if allowTabs
+        then isSpace c
+        else isSpace c && c /= '\t'
+
+validSpaceParser
+    :: (Maybe String -> (TMS.Token String -> Bool) -> Parser (Tokens String))
+    -> (Bool -> Char -> Bool)
+    -> Parser ()
+validSpaceParser taker validator = do
+    tabErrorLevel <- asks psTabErrorLevel
+    void $
+        tryOrReport
+            tabErrorLevel
+            "use spaces instead of tabs"
+            isUnexpectedTabError
+            (taker (Just "valid whitespace") (validator False))
+            (taker (Just "valid whitespace") (validator True))
+
+isUnexpectedTabError :: ParseError String Void -> Bool
+isUnexpectedTabError (TrivialError _ ue l) =
+    ue == Just (Tokens ('\t' :| ""))
+        && l == Set.singleton (Label ('v' :| "alid whitespace"))
+isUnexpectedTabError _ = False
+
+someValidHSpace :: Parser ()
+someValidHSpace = validSpaceParser takeWhile1P isValidHSpace
+
+someValidSpace :: Parser ()
+someValidSpace = validSpaceParser takeWhile1P isValidSpace
+
+validHSpace :: Parser ()
+validHSpace = validSpaceParser takeWhileP isValidHSpace
+
 spaceConsumer :: Parser ()
 spaceConsumer =
     L.space
-        hspace1
+        someValidHSpace
         skipComment
         empty
 
 spaceConsumerN :: Parser ()
 spaceConsumerN =
     L.space
-        space1
+        someValidSpace
         skipComment
         empty
 
@@ -423,7 +594,7 @@ entityHeader :: Parser EntityHeader
 entityHeader = do
     pos <- getSourcePos
     plus <- optional (char '+')
-    en <- hspace *> L.lexeme spaceConsumer blockKey
+    en <- validHSpace *> L.lexeme spaceConsumer blockKey
     rest <- L.lexeme spaceConsumer (many anyToken)
     _ <- setLastDocumentablePosition
     pure
@@ -552,13 +723,19 @@ docCommentBlockFromPositionedTokens ptoks =
                     }
 
 parseEntities
-    :: Text
+    :: PersistSettings
+    -> Text
     -> String
     -> ParseResult [EntityBlock]
-parseEntities fp s = do
-    (entities, _comments) <-
-        runConfiguredParser initialExtraState entitiesFromDocument (Text.unpack fp) s
-    pure entities
+parseEntities ps fp s = do
+    let
+        (warnings, res) =
+            runConfiguredParser ps initialExtraState entitiesFromDocument (Text.unpack fp) s
+    case res of
+        Left peb ->
+            (warnings, Left peb)
+        Right (entities, _comments) ->
+            (warnings, pure entities)
 
 toParsedEntityDef :: Maybe SourceLoc -> EntityBlock -> ParsedEntityDef
 toParsedEntityDef mSourceLoc eb =
@@ -601,10 +778,13 @@ toParsedEntityDef mSourceLoc eb =
                 , spanEndCol = unPos . sourceColumn $ entityBlockLastPos eb
                 }
 
-parseSource :: Maybe SourceLoc -> Text -> ParseResult [ParsedEntityDef]
-parseSource mSourceLoc source =
-    case parseEntities filepath (Text.unpack source) of
-        Right blocks -> Right (toParsedEntityDef mSourceLoc <$> blocks)
-        Left peb -> Left peb
+parseSource
+    :: PersistSettings
+    -> Maybe SourceLoc
+    -> Text
+    -> ParseResult [ParsedEntityDef]
+parseSource ps mSourceLoc source =
+    fmap (fmap (toParsedEntityDef mSourceLoc))
+        <$> parseEntities ps filepath (Text.unpack source)
   where
     filepath = maybe "" locFile mSourceLoc

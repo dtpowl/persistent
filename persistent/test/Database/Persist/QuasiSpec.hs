@@ -9,21 +9,22 @@ import Prelude hiding (lines)
 
 import Control.Exception
 import Data.Bifunctor
-import Data.List hiding (lines)
-import Data.List.NonEmpty (NonEmpty (..), (<|))
 import qualified Data.List.NonEmpty as NEL
 import qualified Data.Map as Map
+import Data.Set (Set)
+import qualified Data.Set as Set
 import qualified Data.Text as T
 import Database.Persist.EntityDef.Internal
 import Database.Persist.Quasi
+import Database.Persist.Quasi.PersistSettings
+import Database.Persist.Quasi.PersistSettings.Internal (psTabErrorLevel)
 import Database.Persist.Quasi.Internal
 import Database.Persist.Quasi.Internal.ModelParser
 import Database.Persist.Types
 import Test.Hspec
-import Test.Hspec.QuickCheck
 import Test.QuickCheck
 import Text.Shakespeare.Text (st)
-import Text.Megaparsec (errorBundlePretty, runParser, some)
+import Text.Megaparsec (errorBundlePretty, some)
 
 defs :: T.Text -> [UnboundEntityDef]
 defs = defsWithSettings lowerCaseSettings
@@ -31,12 +32,33 @@ defs = defsWithSettings lowerCaseSettings
 defsSnake :: T.Text -> [UnboundEntityDef]
 defsSnake = defsWithSettings $ setPsUseSnakeCaseForeignKeys lowerCaseSettings
 
-defsWithSettings :: PersistSettings -> T.Text -> [UnboundEntityDef]
-defsWithSettings ps t = case cpr of
-    Right res -> res
-    Left errs -> error $ renderErrors errs
+defsWithWarnings :: PersistSettings -> T.Text -> (Set ParserWarning, [UnboundEntityDef])
+defsWithWarnings ps t = case cpr of
+                           (warnings, Right res) -> (warnings, res)
+                           (_warnings, Left errs) -> error $ renderErrors errs
   where
     cpr = parse ps [(Nothing, t)]
+
+defsWithSettings :: PersistSettings -> T.Text -> [UnboundEntityDef]
+defsWithSettings ps t = snd $ defsWithWarnings ps t
+
+#if MIN_VERSION_megaparsec(9,5,0)
+warningSpecs :: Spec
+warningSpecs =
+  describe "Quasi" $ do
+      describe "parser settings" $ do
+          let
+              definitions = T.pack "User\n\tId Text\n\tname String"
+              (warnings, [user]) = defsWithWarnings lowerCaseSettings{ psTabErrorLevel = Just LevelWarning } definitions
+          it "generates warnings" $ do
+            Set.map parserWarningMessage warnings
+              `shouldBe` [ "use spaces instead of tabs\n2:1:\n  |\n2 |  Id Text\n  | ^\nunexpected tab\nexpecting valid whitespace\n"
+                         , "use spaces instead of tabs\n3:1:\n  |\n3 |  name String\n  | ^\nunexpected tab\nexpecting valid whitespace\n"
+                         ]
+#else
+warningSpecs :: Spec
+warningSpecs = pure ()
+#endif
 
 spec :: Spec
 spec = describe "Quasi" $ do
@@ -91,169 +113,216 @@ spec = describe "Quasi" $ do
 
     describe "tokenization" $ do
         let
+            tokenize :: String -> ParseResult [Token]
             tokenize s = do
-                (d, c) <- runConfiguredParser initialExtraState (some anyToken) "" s
-                pure d
+              let (warnings, res) = runConfiguredParser defaultPersistSettings initialExtraState (some anyToken) "" s
+              case res of
+                Left peb ->
+                  (warnings, Left peb)
+                Right (tokens, _acc) -> (warnings, Right tokens)
+
         it "handles normal words" $
             tokenize "foo   bar  baz"
-                `shouldBe` Right
-                    ( [ PText "foo"
-                      , PText "bar"
-                      , PText "baz"
-                      ]
-                    )
+                `shouldBe` ([], Right
+                             ( [ PText "foo"
+                               , PText "bar"
+                               , PText "baz"
+                               ]
+                             )
+                           )
 
         it "handles numbers" $
             tokenize "one (Finite 1)"
-                `shouldBe` Right
-                    ( [ PText "one"
-                      , Parenthetical "Finite 1"
-                      ]
-                    )
+                `shouldBe` ([], Right
+                             ( [ PText "one"
+                               , Parenthetical "Finite 1"
+                               ]
+                             )
+                           )
 
         it "handles quotes" $
             tokenize "\"foo bar\" \"baz\""
-                `shouldBe` Right
-                    ( [ Quotation "foo bar"
-                      , Quotation "baz"
-                      ]
-                    )
+                `shouldBe` ([], Right
+                             ( [ Quotation "foo bar"
+                               , Quotation "baz"
+                               ]
+                             )
+                           )
 
         it "handles SQL literals with no specified type" $
             tokenize "attr='[\"ab\\'cd\", 1, 2]'"
-                `shouldBe` Right
-                    ( [Equality "attr" "'[\"ab'cd\", 1, 2]'"]
-                    )
+                `shouldBe` ([], Right
+                             ( [Equality "attr" "'[\"ab'cd\", 1, 2]'"]
+                             )
+                           )
 
         it "handles SQL literals with a specified type" $
             tokenize "attr='{\"\\'a\\'\": [1, 2.2, \"\\'3\\'\"]}'::type_name"
-                `shouldBe` Right
-                    ( [Equality "attr" "'{\"'a'\": [1, 2.2, \"'3'\"]}'::type_name"]
-                    )
+                `shouldBe` ([], Right
+                             ( [Equality "attr" "'{\"'a'\": [1, 2.2, \"'3'\"]}'::type_name"]
+                             )
+                           )
 
         it "should error if quotes are unterminated" $ do
-            first errorBundlePretty (tokenize "\"foo bar")
-                `shouldBe` Left
-                    ( "1:9:\n  |\n1 | \"foo bar\n  |         ^\nunexpected end of input\nexpecting '\"' or literal character\n"
-                    )
+          (fmap . first) errorBundlePretty (tokenize "\"foo bar")
+                `shouldBe` ([], Left
+                             ( "1:9:\n  |\n1 | \"foo bar\n  |         ^\nunexpected end of input\nexpecting '\"' or literal character\n"
+                             )
+                           )
 
         it "handles commas in tokens" $
             tokenize "x=COALESCE(left,right)  \"baz\""
-                `shouldBe` Right
-                    ( [ Equality "x" "COALESCE(left,right)"
-                      , Quotation "baz"
-                      ]
-                    )
+                `shouldBe` ([], Right
+                             ( [ Equality "x" "COALESCE(left,right)"
+                               , Quotation "baz"
+                               ]
+                             )
+                           )
 
         it "handles quotes mid-token" $
             tokenize "x=\"foo bar\"  \"baz\""
-                `shouldBe` Right
-                    ( [ Equality "x" "foo bar"
-                      , Quotation "baz"
-                      ]
-                    )
+                `shouldBe` ([], Right
+                             ( [ Equality "x" "foo bar"
+                               , Quotation "baz"
+                               ]
+                             )
+                           )
 
         it "handles escaped quotes mid-token" $
             tokenize "x=\\\"foo bar\"  \"baz\""
-                `shouldBe` Right
-                    ( [ Equality "x" "\\\"foo"
-                      , PText "bar\""
-                      , Quotation "baz"
-                      ]
-                    )
+                `shouldBe` ([], Right
+                             ( [ Equality "x" "\\\"foo"
+                               , PText "bar\""
+                               , Quotation "baz"
+                               ]
+                             )
+                           )
 
         it "handles unnested parentheses" $
             tokenize "(foo bar)  (baz)"
-                `shouldBe` Right
-                    ( [ Parenthetical "foo bar"
-                      , Parenthetical "baz"
-                      ]
-                    )
+                `shouldBe` ([], Right
+                             ( [ Parenthetical "foo bar"
+                               , Parenthetical "baz"
+                               ]
+                             )
+                           )
 
         it "handles unnested parentheses mid-token" $
             tokenize "x=(foo bar)  (baz)"
-                `shouldBe` Right
-                    ( [ Equality "x" "foo bar"
-                      , Parenthetical "baz"
-                      ]
-                    )
+                `shouldBe` ([], Right
+                             ( [ Equality "x" "foo bar"
+                               , Parenthetical "baz"
+                               ]
+                             )
+                           )
 
         it "handles nested parentheses" $
             tokenize "(foo (bar))  (baz)"
-                `shouldBe` Right
-                    ( [ Parenthetical "foo (bar)"
-                      , Parenthetical "baz"
-                      ]
-                    )
+                `shouldBe` ([], Right
+                             ( [ Parenthetical "foo (bar)"
+                               , Parenthetical "baz"
+                               ]
+                             )
+                           )
 
         it "handles escaped quotation marks in plain tokens" $
             tokenize "foo bar\\\"baz"
-                `shouldBe` Right
-                    ( [ PText "foo"
-                      , PText "bar\\\"baz"
-                      ]
-                    )
+                `shouldBe` ([], Right
+                             ( [ PText "foo"
+                               , PText "bar\\\"baz"
+                               ]
+                             )
+                           )
 
         it "handles escaped quotation marks in quotations" $
             tokenize "foo \"bar\\\"baz\""
-                `shouldBe` Right
-                    ( [ PText "foo"
-                      , Quotation "bar\"baz"
-                      ]
-                    )
+                `shouldBe` ([], Right
+                             ( [ PText "foo"
+                               , Quotation "bar\"baz"
+                               ]
+                             )
+                           )
 
         it "handles escaped quotation marks in equalities" $
             tokenize "y=\"baz\\\"\""
-                `shouldBe` Right
-                    ( [ Equality "y" "baz\""
-                      ]
-                    )
+                `shouldBe` ([], Right
+                             ( [ Equality "y" "baz\""
+                               ]
+                             )
+                           )
 
         it "handles escaped quotation marks in parentheticals" $
             tokenize "(foo \\\"bar)"
-                `shouldBe` Right
-                    ( [ Parenthetical "foo \\\"bar"
-                      ]
-                    )
+                `shouldBe` ([], Right
+                             ( [ Parenthetical "foo \\\"bar"
+                               ]
+                             )
+                           )
 
         it "handles escaped parentheses in quotations" $
             tokenize "foo \"bar\\(baz\""
-                `shouldBe` Right
-                    ( [ PText "foo"
-                      , Quotation "bar(baz"
-                      ]
-                    )
+                `shouldBe` ([], Right
+                             ( [ PText "foo"
+                               , Quotation "bar(baz"
+                               ]
+                             )
+                           )
 
         it "handles escaped parentheses in plain tokens" $
             tokenize "foo bar\\(baz"
-                `shouldBe` Right
-                    ( [ PText "foo"
-                      , PText "bar(baz"
-                      ]
-                    )
+                `shouldBe` ([], Right
+                             ( [ PText "foo"
+                               , PText "bar(baz"
+                               ]
+                             )
+                           )
 
         it "handles escaped parentheses in parentheticals" $
             tokenize "(foo \\(bar)"
-                `shouldBe` Right
-                    ( [ Parenthetical "foo (bar"
-                      ]
-                    )
+                `shouldBe` ([], Right
+                             ( [ Parenthetical "foo (bar"
+                               ]
+                             )
+                           )
 
         it "handles escaped parentheses in equalities" $
             tokenize "y=baz\\("
-                `shouldBe` Right
-                    ( [ Equality "y" "baz("
-                      ]
-                    )
+                `shouldBe` ([], Right
+                             ( [ Equality "y" "baz("
+                               ]
+                             )
+                           )
 
         it "handles mid-token quote in later token" $
             tokenize "foo bar baz=(bin\")"
-                `shouldBe` Right
-                    ( [ PText "foo"
-                      , PText "bar"
-                      , Equality "baz" "bin\""
-                      ]
-                    )
+                `shouldBe` ([], Right
+                             ( [ PText "foo"
+                               , PText "bar"
+                               , Equality "baz" "bin\""
+                               ]
+                             )
+                           )
+
+    describe "parser settings" $ do
+      let definitions = T.pack "User\n\tId Text\n\tname String"
+
+      describe "when configured to permit tabs" $ do
+        let
+            [user] = defsWithSettings lowerCaseSettings{ psTabErrorLevel = Nothing } definitions
+        it "permits tab indentation" $
+          getUnboundEntityNameHS user `shouldBe` EntityNameHS "User"
+
+      describe "when configured to warn on tabs" $ do
+        let
+            (warnings, [user]) = defsWithWarnings lowerCaseSettings{ psTabErrorLevel = Just LevelWarning } definitions
+        it "permits tab indentation" $
+          getUnboundEntityNameHS user `shouldBe` EntityNameHS "User"
+
+      describe "when configured to disallow tabs" $ do
+        let
+          [user] = defsWithSettings lowerCaseSettings{ psTabErrorLevel = Just LevelError } definitions
+        it "rejects tab indentation" $
+          evaluate (unboundEntityDef user) `shouldErrorWithMessage` "2:1:\n  |\n2 |  Id Text\n  | ^\nunexpected tab\nexpecting valid whitespace\n\n3:1:\n  |\n3 |  name String\n  | ^\nunexpected tab\nexpecting valid whitespace\n"
 
     describe "parse" $ do
         let

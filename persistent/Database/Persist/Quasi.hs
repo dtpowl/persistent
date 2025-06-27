@@ -920,70 +920,18 @@ module Database.Persist.Quasi
     , upperCaseSettings
     , lowerCaseSettings
     -- ** Getters and Setters
-    , module Database.Persist.Quasi
+    , getPsToDBName
+    , setPsToDBName
+    , setPsToFKName
+    , setPsUseSnakeCaseForeignKeys
+    , setPsUseSnakeCaseForiegnKeys
+    , getPsStrictFields
+    , setPsStrictFields
+    , getPsIdName
+    , setPsIdName
+    , getPsTabErrorLevel
+    , setPsTabErrorLevel
     ) where
 
-import Data.Text (Text)
-import Database.Persist.Names
+import Database.Persist.Quasi.PersistSettings
 import Database.Persist.Quasi.Internal
-
--- | Retrieve the function in the 'PersistSettings' that modifies the names into
--- database names.
---
--- @since 2.13.0.0
-getPsToDBName :: PersistSettings -> Text -> Text
-getPsToDBName = psToDBName
-
--- | Set the name modification function that translates the QuasiQuoted names
--- for use in the database.
---
--- @since 2.13.0.0
-setPsToDBName :: (Text -> Text) -> PersistSettings -> PersistSettings
-setPsToDBName f ps = ps { psToDBName = f }
-
--- | Set a custom function used to create the constraint name
--- for a foreign key.
---
--- @since 2.13.0.0
-setPsToFKName :: (EntityNameHS -> ConstraintNameHS -> Text) -> PersistSettings -> PersistSettings
-setPsToFKName setter ps = ps { psToFKName = setter }
-
--- | A preset configuration function that puts an underscore
--- between the entity name and the constraint name when
--- creating a foreign key constraint name
---
--- @since 2.14.2.0
-setPsUseSnakeCaseForeignKeys :: PersistSettings -> PersistSettings
-setPsUseSnakeCaseForeignKeys = setPsToFKName (toFKNameInfixed "_")
-
--- Equivalent to 'setPsUseSnakeCaseForeignKeys', but misspelled.
---
--- @since 2.13.0.0
-setPsUseSnakeCaseForiegnKeys :: PersistSettings -> PersistSettings
-setPsUseSnakeCaseForiegnKeys = setPsUseSnakeCaseForeignKeys
-{-# DEPRECATED setPsUseSnakeCaseForiegnKeys "use the correctly spelled, equivalent, setPsUseSnakeCaseForeignKeys instead" #-}
-
--- | Retrieve whether or not the 'PersistSettings' will generate code with
--- strict fields.
---
--- @since 2.13.0.0
-getPsStrictFields :: PersistSettings -> Bool
-getPsStrictFields = psStrictFields
-
--- | Set whether or not the 'PersistSettings' will make fields strict.
---
--- @since 2.13.0.0
-setPsStrictFields :: Bool -> PersistSettings -> PersistSettings
-setPsStrictFields a ps = ps { psStrictFields = a }
-
--- | Retrieve the default name of the @id@ column.
---
--- @since 2.13.0.0
-getPsIdName :: PersistSettings -> Text
-getPsIdName = psIdName
-
--- | Set the default name of the @id@ column.
---
--- @since 2.13.0.0
-setPsIdName :: Text -> PersistSettings -> PersistSettings
-setPsIdName n ps = ps { psIdName = n }

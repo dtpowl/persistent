@@ -11,11 +11,11 @@ module Database.Persist.Class.PersistField
 
 import Control.Arrow (second)
 import Control.Monad ((<=<))
-import Control.Applicative ((<|>))
 import qualified Data.Aeson as A
 import Data.ByteString.Char8 (ByteString, unpack, readInt)
 import qualified Data.ByteString.Lazy as L
 import Data.Fixed
+import Data.Foldable (asum)
 import Data.Int (Int8, Int16, Int32, Int64)
 import qualified Data.IntMap as IM
 import qualified Data.List.NonEmpty as NonEmpty
@@ -302,16 +302,37 @@ instance PersistField TimeOfDay where
 
 instance PersistField UTCTime where
     toPersistValue = PersistUTCTime
-    fromPersistValue (PersistUTCTime d) = Right d
+    fromPersistValue = utcTimeFromPersistValue
+
 #ifdef HIGH_PRECISION_DATE
-    fromPersistValue (PersistInt64 i)   = Right $ posixSecondsToUTCTime $ (/ (1000 * 1000 * 1000)) $ fromIntegral $ i
+utcTimeFromPersistValue :: PersistValue -> Either Text UTCTime
+utcTimeFromPersistValue  (PersistUTCTime d) = Right d
+utcTimeFromPersistValue (PersistInt64 i)  = Right $ posixSecondsToUTCTime $ (/ (1000 * 1000 * 1000)) $ fromIntegral $ i
+utcTimeFromPersistValue (PersistText t)  = utcTimeFromPersistText t
+utcTimeFromPersistValue x@(PersistByteString s) =
+        case reads $ unpack s of
+            (d, _):_ -> Right d
+            _ -> Left $ fromPersistValueParseError "UTCTime" x
+utcTimeFromPersistValue x = Left $ fromPersistValueError "UTCTime" "time, integer, string, or bytestring" x
+#else
+utcTimeFromPersistValue :: PersistValue -> Either Text UTCTime
+utcTimeFromPersistValue  (PersistUTCTime d) = Right d
+utcTimeFromPersistValue (PersistText t)  = utcTimeFromPersistText t
+utcTimeFromPersistValue x@(PersistByteString s) =
+        case reads $ unpack s of
+            (d, _):_ -> Right d
+            _ -> Left $ fromPersistValueParseError "UTCTime" x
+utcTimeFromPersistValue x = Left $ fromPersistValueError "UTCTime" "time, integer, string, or bytestring" x
 #endif
-    fromPersistValue x@(PersistText t)  =
-        let s = T.unpack t
+
+utcTimeFromPersistText :: Text -> Either Text UTCTime
+utcTimeFromPersistText  t =
+        let x = PersistText t
+            s = T.unpack t
         in
           case NonEmpty.nonEmpty (reads s) of
             Nothing ->
-                case parse8601 s <|> parsePretty s of
+                case asum [parse8601 s, parse8601NoTimezone s, parsePretty s, parsePrettyNoTimezone s] of
                     Nothing -> Left $ fromPersistValueParseError "UTCTime" x
                     Just x' -> Right x'
             Just matches ->
@@ -322,19 +343,20 @@ instance PersistField UTCTime where
                 -- precision parsed as posssible.
                 Right $ fst $ NonEmpty.last matches
       where
-#if MIN_VERSION_time(1,5,0)
-        parseTime' = parseTimeM True defaultTimeLocale
-#else
-        parseTime' = parseTime defaultTimeLocale
-#endif
-        parse8601 = parseTime' "%FT%T%Q"
-        parsePretty = parseTime' "%F %T%Q"
-    fromPersistValue x@(PersistByteString s) =
-        case reads $ unpack s of
-            (d, _):_ -> Right d
-            _ -> Left $ fromPersistValueParseError "UTCTime" x
+        parse8601 = parseTime' "%FT%T%QZ"
+        parsePretty = parseTime' "%F %T%QZ"
+        -- Before 2.13.3.1 persistent-sqlite was missing the timezone "Z" for UTC,
+        -- which was only implicit, so these functions ensure backwards-compatibility.
+        parse8601NoTimezone = parseTime' "%FT%T%Q"
+        parsePrettyNoTimezone = parseTime' "%F %T%Q"
 
-    fromPersistValue x = Left $ fromPersistValueError "UTCTime" "time, integer, string, or bytestring" x
+#if MIN_VERSION_time(1,5,0)
+parseTime' :: String -> String -> Maybe UTCTime
+parseTime' = parseTimeM True defaultTimeLocale
+#else
+parseTime' :: String -> String -> Maybe UTCTime
+parseTime' = parseTime defaultTimeLocale
+#endif
 
 -- | Prior to @persistent-2.11.0@, we provided an instance of
 -- 'PersistField' for the 'Natural' type. This was in error, because

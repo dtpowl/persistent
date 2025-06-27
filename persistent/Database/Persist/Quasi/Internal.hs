@@ -16,14 +16,14 @@ module Database.Persist.Quasi.Internal
     , PersistSettings (..)
     , upperCaseSettings
     , lowerCaseSettings
-    , toFKNameInfixed
     , Token (..)
     , SourceLoc (..)
     , sourceLocFromTHLoc
     , parseFieldType
     , takeColsEx
-    , CumulativeParseResult (..)
+    , CumulativeParseResult
     , renderErrors
+    , parserWarningMessage
 
       -- * UnboundEntityDef
     , UnboundEntityDef (..)
@@ -61,6 +61,12 @@ import Data.Monoid (mappend)
 import Data.Text (Text)
 import qualified Data.Text as T
 import Database.Persist.EntityDef.Internal
+import Database.Persist.Quasi.PersistSettings
+import Database.Persist.Quasi.PersistSettings.Internal ( psToFKName
+                                                       , psToDBName
+                                                       , psIdName
+                                                       , psStrictFields
+                                                       )
 import Database.Persist.Quasi.Internal.ModelParser
 import Database.Persist.Types
 import Database.Persist.Types.Base
@@ -169,50 +175,6 @@ parseFieldTypePiece fstChar rest =
                     ("", _) -> FTTypeCon Nothing t
                     (a, b) -> FTTypeCon (Just $ T.init a) b
 
-data PersistSettings = PersistSettings
-    { psToDBName :: !(Text -> Text)
-    -- ^ Modify the Haskell-style name into a database-style name.
-    , psToFKName :: !(EntityNameHS -> ConstraintNameHS -> Text)
-    -- ^ A function for generating the constraint name, with access to
-    -- the entity and constraint names. Default value: @mappend@
-    --
-    -- @since 2.13.0.0
-    , psStrictFields :: !Bool
-    -- ^ Whether fields are by default strict. Default value: @True@.
-    --
-    -- @since 1.2
-    , psIdName :: !Text
-    -- ^ The name of the id column. Default value: @id@
-    -- The name of the id column can also be changed on a per-model basis
-    -- <https://github.com/yesodweb/persistent/wiki/Persistent-entity-syntax>
-    --
-    -- @since 2.0
-    }
-
-defaultPersistSettings, upperCaseSettings, lowerCaseSettings :: PersistSettings
-defaultPersistSettings =
-    PersistSettings
-        { psToDBName = id
-        , psToFKName = \(EntityNameHS entName) (ConstraintNameHS conName) -> entName <> conName
-        , psStrictFields = True
-        , psIdName = "id"
-        }
-upperCaseSettings = defaultPersistSettings
-lowerCaseSettings =
-    defaultPersistSettings
-        { psToDBName =
-            let
-                go c
-                    | isUpper c = T.pack ['_', toLower c]
-                    | otherwise = T.singleton c
-             in
-                T.dropWhile (== '_') . T.concatMap go
-        }
-
-toFKNameInfixed :: Text -> EntityNameHS -> ConstraintNameHS -> Text
-toFKNameInfixed inf (EntityNameHS entName) (ConstraintNameHS conName) =
-    entName <> inf <> conName
-
 sourceLocFromTHLoc :: Loc -> SourceLoc
 sourceLocFromTHLoc Loc{loc_filename = filename, loc_start = start} =
     SourceLoc
@@ -230,7 +192,7 @@ parse ps chunks = toCumulativeParseResult $ map parseChunk chunks
   where
     parseChunk :: (Maybe SourceLoc, Text) -> ParseResult [UnboundEntityDef]
     parseChunk (mSourceLoc, source) =
-      (fmap . fmap) (mkUnboundEntityDef ps) (parseSource mSourceLoc source)
+      (fmap . fmap) (mkUnboundEntityDef ps) <$> parseSource ps mSourceLoc source
 
 entityNamesFromParsedDef
     :: PersistSettings -> ParsedEntityDef -> (EntityNameHS, EntityNameDB)
