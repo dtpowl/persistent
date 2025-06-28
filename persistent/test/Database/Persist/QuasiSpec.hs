@@ -113,10 +113,10 @@ spec = describe "Quasi" $ do
 
     describe "tokenization" $ do
         let
-            tokenize :: String -> ParseResult [Token]
+            tokenize :: String -> ParseResult [Attribute]
             tokenize s = do
               let
-                (warnings, res) = runConfiguredParser defaultPersistSettings initialExtraState (some feature) "" s
+                (warnings, res) = runConfiguredParser defaultPersistSettings initialExtraState (some attribute) "" s
               case res of
                 Left peb ->
                   (warnings, Left peb)
@@ -144,8 +144,8 @@ spec = describe "Quasi" $ do
         it "handles quotes" $
             tokenize "abc=\"foo bar\" def=\"baz\""
                 `shouldBe` ([], Right
-                             ( [ Equality "abc" "foo bar"
-                               , Equality "def" "baz"
+                             ( [ Assignment "abc" "foo bar"
+                               , Assignment "def" "baz"
                                ]
                              )
                            )
@@ -153,14 +153,14 @@ spec = describe "Quasi" $ do
         it "handles SQL literals with no specified type" $
             tokenize "attr='[\"ab\\'cd\", 1, 2]'"
                 `shouldBe` ([], Right
-                             ( [Equality "attr" "'[\"ab'cd\", 1, 2]'"]
+                             ( [Assignment "attr" "'[\"ab'cd\", 1, 2]'"]
                              )
                            )
 
         it "handles SQL literals with a specified type" $
             tokenize "attr='{\"\\'a\\'\": [1, 2.2, \"\\'3\\'\"]}'::type_name"
                 `shouldBe` ([], Right
-                             ( [Equality "attr" "'{\"'a'\": [1, 2.2, \"'3'\"]}'::type_name"]
+                             ( [Assignment "attr" "'{\"'a'\": [1, 2.2, \"'3'\"]}'::type_name"]
                              )
                            )
 
@@ -174,7 +174,7 @@ spec = describe "Quasi" $ do
         it "handles commas in tokens" $
             tokenize "x=COALESCE(left,right)  baz"
                 `shouldBe` ([], Right
-                             ( [ Equality "x" "COALESCE(left,right)"
+                             ( [ Assignment "x" "COALESCE(left,right)"
                                , PText "baz"
                                ]
                              )
@@ -183,7 +183,7 @@ spec = describe "Quasi" $ do
         it "handles quotes mid-token" $
             tokenize "x=\"foo bar\"  baz"
                 `shouldBe` ([], Right
-                             ( [ Equality "x" "foo bar"
+                             ( [ Assignment "x" "foo bar"
                                , PText "baz"
                                ]
                              )
@@ -192,7 +192,7 @@ spec = describe "Quasi" $ do
         it "handles escaped quotes mid-token" $
             tokenize "x=\\\"foo bar\"  baz"
                 `shouldBe` ([], Right
-                             ( [ Equality "x" "\\\"foo"
+                             ( [ Assignment "x" "\\\"foo"
                                , PText "bar\""
                                , PText "baz"
                                ]
@@ -211,7 +211,7 @@ spec = describe "Quasi" $ do
         it "handles unnested parentheses mid-token" $
             tokenize "x=(foo bar)  (baz)"
                 `shouldBe` ([], Right
-                             ( [ Equality "x" "foo bar"
+                             ( [ Assignment "x" "foo bar"
                                , Parenthetical "baz"
                                ]
                              )
@@ -239,7 +239,7 @@ spec = describe "Quasi" $ do
             tokenize "foo bar=\"baz\\\"quux\""
                 `shouldBe` ([], Right
                              ( [ PText "foo"
-                               , Equality "bar" "baz\"quux"
+                               , Assignment "bar" "baz\"quux"
                                ]
                              )
                            )
@@ -247,7 +247,7 @@ spec = describe "Quasi" $ do
         it "handles escaped quotation marks in equalities" $
             tokenize "y=\"baz\\\"\""
                 `shouldBe` ([], Right
-                             ( [ Equality "y" "baz\""
+                             ( [ Assignment "y" "baz\""
                                ]
                              )
                            )
@@ -264,7 +264,7 @@ spec = describe "Quasi" $ do
             tokenize "foo bar=\"baz\\(quux\""
                 `shouldBe` ([], Right
                              ( [ PText "foo"
-                               , Equality "bar" "baz(quux"
+                               , Assignment "bar" "baz(quux"
                                ]
                              )
                            )
@@ -289,7 +289,7 @@ spec = describe "Quasi" $ do
         it "handles escaped parentheses in equalities" $
             tokenize "y=baz\\("
                 `shouldBe` ([], Right
-                             ( [ Equality "y" "baz("
+                             ( [ Assignment "y" "baz("
                                ]
                              )
                            )
@@ -299,7 +299,7 @@ spec = describe "Quasi" $ do
                 `shouldBe` ([], Right
                              ( [ PText "foo"
                                , PText "bar"
-                               , Equality "baz" "bin\""
+                               , Assignment "baz" "bin\""
                                ]
                              )
                            )

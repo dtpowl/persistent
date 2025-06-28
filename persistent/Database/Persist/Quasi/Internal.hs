@@ -16,7 +16,7 @@ module Database.Persist.Quasi.Internal
     , PersistSettings (..)
     , upperCaseSettings
     , lowerCaseSettings
-    , Token (..)
+    , Attribute (..)
     , SourceLoc (..)
     , sourceLocFromTHLoc
     , parseFieldType
@@ -553,7 +553,7 @@ mkUnboundEntityDef ps parsedEntDef =
     cols = foldMap (toList . commentedField ps) attribs
 
     textAttribs :: [[Text]]
-    textAttribs = fmap tokenContent . fst <$> attribs
+    textAttribs = fmap attributeContent . fst <$> attribs
 
     entityConstraintDefs =
         foldMap
@@ -574,10 +574,10 @@ mkUnboundEntityDef ps parsedEntDef =
 
     commentedField
         :: PersistSettings
-        -> ([Token], Maybe Text)
+        -> ([Attribute], Maybe Text)
         -> Maybe UnboundFieldDef
     commentedField s (tokens, mCommentText) = do
-        unb <- takeColsEx s (tokenContent <$> tokens)
+        unb <- takeColsEx s (attributeContent <$> tokens)
         pure $ unb{unboundFieldComments = mCommentText}
 
     autoIdField :: FieldDef

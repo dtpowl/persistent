@@ -9,9 +9,9 @@
 
 module Database.Persist.Quasi.Internal.ModelParser
     ( SourceLoc (..)
-    , Token (..)
-    , feature
-    , tokenContent
+    , Attribute (..)
+    , attribute
+    , attributeContent
     , ParsedEntityDef
     , parsedEntityDefComments
     , parsedEntityDefEntityName
@@ -34,7 +34,7 @@ module Database.Persist.Quasi.Internal.ModelParser
     ) where
 
 import Control.Applicative (Alternative)
-import Control.Monad (MonadPlus, mzero, void)
+import Control.Monad (MonadPlus, void)
 import Control.Monad.Reader (MonadReader, ReaderT, asks, runReaderT)
 import Control.Monad.State
 import Control.Monad.Writer
@@ -42,7 +42,7 @@ import Data.Char (isSpace)
 import Data.Either (partitionEithers)
 import Data.Foldable (fold)
 import Data.Functor.Identity
-import Data.List (find, intercalate)
+import Data.List (intercalate)
 import Data.List.NonEmpty (NonEmpty (..))
 import qualified Data.List.NonEmpty as NEL
 import qualified Data.Map as M
@@ -56,15 +56,16 @@ import Database.Persist.Quasi.PersistSettings.Internal
 import Database.Persist.Types
 import Database.Persist.Types.SourceSpan
 import Language.Haskell.TH.Syntax (Lift)
-import Text.Megaparsec hiding (Token)
+import Text.Megaparsec
 import Text.Megaparsec.Char
 import qualified Text.Megaparsec.Char.Lexer as L
 import qualified Text.Megaparsec.Stream as TMS
+import Database.Persist.Quasi.Internal.TypeParser
 
 -- We'll augment the parser with extra state to accumulate comments seen during parsing.
 -- Comments are lexed as whitespace, but will be used to generate documentation later.
 data ExtraState = ExtraState
-    { esPositionedCommentTokens :: [(SourcePos, CommentToken)]
+    { esPositionedCommentAttributes :: [(SourcePos, CommentAttribute)]
     , esLastDocumentablePosition :: Maybe SourcePos
     }
 
@@ -72,7 +73,7 @@ data ExtraState = ExtraState
 initialExtraState :: ExtraState
 initialExtraState =
     ExtraState
-        { esPositionedCommentTokens = []
+        { esPositionedCommentAttributes = []
         , esLastDocumentablePosition = Nothing
         }
 
@@ -211,19 +212,18 @@ tryOrWarn msg p l r = do
             else parseError err
 
 -- | Attempts to parse with a provided parser. If it fails with an error matching
--- the provided predicate, it registers a delayed error with the provided message and falls
+-- the provided predicate, it registers a delayed error and falls
 -- back to the second provided parser.
 --
 -- This is useful when registering errors in space consumers and other parsers that are called
 -- with `try`, since a non-delayed error in this context will cause backtracking and not
 -- get reported to the user.
 tryOrRegisterError
-    :: String
-    -> (ParseError String Void -> Bool)
+    :: (ParseError String Void -> Bool)
     -> Parser a
     -> Parser a
     -> Parser a
-tryOrRegisterError msg p l r = do
+tryOrRegisterError p l r = do
     parserState <- getParserState
     withRecovery (delayedError $ statePosState parserState) l
   where
@@ -244,7 +244,7 @@ tryOrReport
     -> Parser a
     -> Parser a
 tryOrReport level msg p l r = case level of
-    Just LevelError -> tryOrRegisterError msg p l r
+    Just LevelError -> tryOrRegisterError p l r
     Just LevelWarning -> tryOrWarn msg p l r
     Nothing -> r
 
@@ -258,43 +258,57 @@ data SourceLoc = SourceLoc
     }
     deriving (Show, Lift)
 
+-- todo dtp: update since
 -- @since 2.16.0.0
-data Token
-    = Equality Text Text
+data Attribute
+    = Assignment Text Text
     | Parenthetical Text
-    | BlockKey Text
     | PText Text
     deriving (Eq, Ord, Show)
 
+data BlockKey = BlockKey Text
+  deriving (Show)
+
 -- @since 2.16.0.0
-data CommentToken
+data CommentAttribute
     = DocComment Text
     | Comment Text
     deriving (Eq, Ord, Show)
 
--- | Converts a token into a Text representation for second-stage parsing or presentation to the user
+-- | Converts an attribute into a Text representation for second-stage parsing or
+-- presentation to the user
 --
 -- @since 2.16.0.0
-tokenContent :: Token -> Text
-tokenContent = \case
-    Equality l r -> mconcat [l, "=", r]
+attributeContent :: Attribute -> Text
+attributeContent = \case
+    Assignment l r -> mconcat [l, "=", r]
     Parenthetical s -> s
     PText s -> s
-    BlockKey s -> s
 
-commentContent :: CommentToken -> Text
+blockKeyContent :: BlockKey -> Text
+blockKeyContent (BlockKey t) = t
+
+commentContent :: CommentAttribute -> Text
 commentContent = \case
     Comment s -> s
     DocComment s -> s
 
-docComment :: Parser (SourcePos, CommentToken)
+attribute :: Parser Attribute
+attribute =
+    choice
+        [ try assignment
+        , parenthetical
+        , ptext
+        ]
+
+docComment :: Parser (SourcePos, CommentAttribute)
 docComment = do
     pos <- getSourcePos
     content <-
         string "-- |" *> validHSpace *> takeWhileP (Just "character") (/= '\n')
     pure (pos, DocComment (Text.pack content))
 
-comment :: Parser (SourcePos, CommentToken)
+comment :: Parser (SourcePos, CommentAttribute)
 comment = do
     pos <- getSourcePos
     content <-
@@ -406,8 +420,8 @@ charLiteral = label "literal character" $ do
                 _ -> unexpected (Tokens $ char2 :| [])
         _ -> pure char1
 
-equality :: Parser Token
-equality = label "equality expression" $ do
+assignment :: Parser Attribute
+assignment = label "assignment expression" $ do
     L.lexeme spaceConsumer $ do
         lhs <- some contentChar
         _ <- char '='
@@ -418,7 +432,7 @@ equality = label "equality expression" $ do
                 , parentheticalInner
                 , some $ contentChar <|> char '(' <|> char ')'
                 ]
-        pure $ Equality (Text.pack lhs) (Text.pack rhs)
+        pure $ Assignment (Text.pack lhs) (Text.pack rhs)
   where
     parentheticalInner = do
         str <- parenthetical'
@@ -450,7 +464,7 @@ sqlLiteral = label "SQL literal" $ do
 quotation :: Parser String
 quotation = char '"' *> manyTill charLiteral (char '"')
 
-parenthetical :: Parser Token
+parenthetical :: Parser Attribute
 parenthetical = label "parenthetical" $ do
     str <- L.lexeme spaceConsumer parenthetical'
     pure . Parenthetical . Text.pack . init . drop 1 $ str
@@ -463,14 +477,14 @@ parenthetical' = do
     q = mconcat <$> some (c <|> parenthetical')
     c = (: []) <$> choice [contentChar, nonLineSpaceChar, char '"']
 
-blockKey :: Parser Token
+blockKey :: Parser BlockKey
 blockKey = label "block key" $ do
     fl <- upperChar
     rl <- many alphaNumChar
     pure . BlockKey . Text.pack $ fl : rl
 
-ptext :: Parser Token
-ptext = label "plain token" $ do
+ptext :: Parser Attribute
+ptext = label "plain attribute" $ do
     str <- L.lexeme spaceConsumer $ do
       first <- initialChar
       rest <- many contentChar
@@ -484,22 +498,12 @@ ptext = label "plain token" $ do
                          , char '~'
                          ]
 
--- | Parses a feature of a block attribute,
--- of an entity block header, or of an extra block header.
-feature :: Parser Token
-feature =
-    choice
-        [ try equality
-        , parenthetical
-        , ptext
-        ]
-
 data ParsedEntityDef = ParsedEntityDef
     { parsedEntityDefComments :: [Text]
     , parsedEntityDefEntityName :: EntityNameHS
     , parsedEntityDefIsSum :: Bool
     , parsedEntityDefEntityAttributes :: [Attr]
-    , parsedEntityDefFieldAttributes :: [([Token], Maybe Text)]
+    , parsedEntityDefFieldAttributes :: [([Attribute], Maybe Text)]
     , parsedEntityDefExtras :: M.Map Text [ExtraLine]
     , parsedEntityDefSpan :: Maybe SourceSpan
     }
@@ -514,7 +518,7 @@ data DocCommentBlock = DocCommentBlock
 data EntityHeader = EntityHeader
     { entityHeaderSum :: Bool
     , entityHeaderTableName :: Text
-    , entityHeaderRemainingTokens :: [Token]
+    , entityHeaderRemainingAttributes :: [Attribute]
     , entityHeaderPos :: SourcePos
     }
     deriving (Show)
@@ -550,7 +554,7 @@ entityBlockExtraBlocks = foldMap f <$> entityBlockMembers
 
 data ExtraBlockHeader = ExtraBlockHeader
     { extraBlockHeaderKey :: Text
-    , extraBlockHeaderRemainingTokens :: [Token]
+    , extraBlockHeaderRemainingAttributes :: [Attribute]
     , extraBlockHeaderPos :: SourcePos
     }
     deriving (Show)
@@ -564,7 +568,7 @@ data ExtraBlock = ExtraBlock
 
 data BlockAttr = BlockAttr
     { blockAttrDocCommentBlock :: Maybe DocCommentBlock
-    , blockAttrTokens :: [Token]
+    , blockAttrAttributes :: [Attribute]
     , blockAttrPos :: SourcePos
     }
     deriving (Show)
@@ -590,7 +594,7 @@ extraBlocksAsMap exs = M.fromList $ fmap asPair exs
     asPair ex =
         (extraBlockHeaderKey . extraBlockExtraBlockHeader $ ex, extraLines ex)
     extraLines ex = foldMap asExtraLine (extraBlockMembers ex)
-    asExtraLine (MemberBlockAttr fs) = [tokenContent <$> blockAttrTokens fs]
+    asExtraLine (MemberBlockAttr fs) = [attributeContent <$> blockAttrAttributes fs]
     asExtraLine _ = []
 
 entityHeader :: Parser EntityHeader
@@ -598,23 +602,23 @@ entityHeader = do
     pos <- getSourcePos
     plus <- optional (char '+')
     en <- validHSpace *> L.lexeme spaceConsumer blockKey
-    rest <- L.lexeme spaceConsumer (many feature)
+    rest <- L.lexeme spaceConsumer (many attribute)
     _ <- setLastDocumentablePosition
     pure
         EntityHeader
             { entityHeaderSum = isJust plus
-            , entityHeaderTableName = tokenContent en
-            , entityHeaderRemainingTokens = rest
+            , entityHeaderTableName = blockKeyContent en
+            , entityHeaderRemainingAttributes = rest
             , entityHeaderPos = pos
             }
 
-appendCommentToState :: (SourcePos, CommentToken) -> Parser ()
+appendCommentToState :: (SourcePos, CommentAttribute) -> Parser ()
 appendCommentToState ptok =
     modify $ \es ->
         let
-            comments = esPositionedCommentTokens es
+            comments = esPositionedCommentAttributes es
          in
-            es{esPositionedCommentTokens = ptok : comments}
+            es{esPositionedCommentAttributes = ptok : comments}
 
 setLastDocumentablePosition :: Parser ()
 setLastDocumentablePosition = do
@@ -625,15 +629,15 @@ getDcb :: Parser (Maybe DocCommentBlock)
 getDcb = do
     es <- get
     let
-        comments = reverse $ esPositionedCommentTokens es
-    _ <- put es{esPositionedCommentTokens = []}
+        comments = reverse $ esPositionedCommentAttributes es
+    _ <- put es{esPositionedCommentAttributes = []}
     let
         candidates = dropWhile (\(_sp, ct) -> not (isDocComment ct)) comments
         filteredCandidates = dropWhile (commentIsIncorrectlyPositioned es) candidates
-    pure $ docCommentBlockFromPositionedTokens filteredCandidates
+    pure $ docCommentBlockFromPositionedAttributes filteredCandidates
   where
     commentIsIncorrectlyPositioned
-        :: ExtraState -> (SourcePos, CommentToken) -> Bool
+        :: ExtraState -> (SourcePos, CommentAttribute) -> Bool
     commentIsIncorrectlyPositioned es ptok = case esLastDocumentablePosition es of
         Nothing -> False
         Just lastDocumentablePos -> (sourceLine . fst) ptok <= sourceLine lastDocumentablePos
@@ -661,12 +665,12 @@ extraBlockHeader :: Parser ExtraBlockHeader
 extraBlockHeader = do
     pos <- getSourcePos
     tn <- L.lexeme spaceConsumer blockKey
-    rest <- L.lexeme spaceConsumer (many feature)
+    rest <- L.lexeme spaceConsumer (many attribute)
     _ <- setLastDocumentablePosition
     pure $
         ExtraBlockHeader
-            { extraBlockHeaderKey = tokenContent tn
-            , extraBlockHeaderRemainingTokens = rest
+            { extraBlockHeaderKey = blockKeyContent tn
+            , extraBlockHeaderRemainingAttributes = rest
             , extraBlockHeaderPos = pos
             }
 
@@ -674,14 +678,14 @@ blockAttr :: Parser Member
 blockAttr = do
     dcb <- getDcb
     pos <- getSourcePos
-    line <- some feature
+    line <- some attribute
     _ <- setLastDocumentablePosition
     lookAhead (void newline <|> eof)
     pure $
         MemberBlockAttr
             BlockAttr
                 { blockAttrDocCommentBlock = dcb
-                , blockAttrTokens = line
+                , blockAttrAttributes = line
                 , blockAttrPos = pos
                 }
 
@@ -709,14 +713,14 @@ entitiesFromDocument = many entityBlock
 docCommentBlockText :: DocCommentBlock -> Text
 docCommentBlockText dcb = Text.unlines $ docCommentBlockLines dcb
 
-isDocComment :: CommentToken -> Bool
+isDocComment :: CommentAttribute -> Bool
 isDocComment tok = case tok of
     DocComment _ -> True
     _ -> False
 
-docCommentBlockFromPositionedTokens
-    :: [(SourcePos, CommentToken)] -> Maybe DocCommentBlock
-docCommentBlockFromPositionedTokens ptoks =
+docCommentBlockFromPositionedAttributes
+    :: [(SourcePos, CommentAttribute)] -> Maybe DocCommentBlock
+docCommentBlockFromPositionedAttributes ptoks =
     case NEL.nonEmpty ptoks of
         Nothing -> Nothing
         Just nel ->
@@ -759,11 +763,11 @@ toParsedEntityDef mSourceLoc eb =
             docCommentBlockLines
             (entityBlockDocCommentBlock eb)
     entityAttributes =
-        tokenContent <$> (entityHeaderRemainingTokens . entityBlockEntityHeader) eb
+        attributeContent <$> (entityHeaderRemainingAttributes . entityBlockEntityHeader) eb
     isSum = entityHeaderSum . entityBlockEntityHeader $ eb
     entityNameHS = EntityNameHS . entityHeaderTableName . entityBlockEntityHeader $ eb
 
-    attributePair a = (blockAttrTokens a, docCommentBlockText <$> blockAttrDocCommentBlock a)
+    attributePair a = (blockAttrAttributes a, docCommentBlockText <$> blockAttrDocCommentBlock a)
     parsedFieldAttributes = fmap attributePair (entityBlockBlockAttrs eb)
 
     extras = extraBlocksAsMap (entityBlockExtraBlocks eb)
