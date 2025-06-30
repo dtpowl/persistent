@@ -556,6 +556,7 @@ entityBlockBlockFields = foldMap f <$> entityBlockMembers
     f m = case m of
         MemberExtraBlock _ -> []
         MemberBlockField ba -> [ba]
+        MemberBlockDirective _ -> []
 
 entityBlockExtraBlocks :: EntityBlock -> [ExtraBlock]
 entityBlockExtraBlocks = foldMap f <$> entityBlockMembers
@@ -563,6 +564,15 @@ entityBlockExtraBlocks = foldMap f <$> entityBlockMembers
     f m = case m of
         MemberExtraBlock eb -> [eb]
         MemberBlockField _ -> []
+        MemberBlockDirective _ -> []
+
+entityBlockDirectives :: EntityBlock -> [BlockDirective]
+entityBlockDirectives = foldMap f <$> entityBlockMembers
+  where
+    f m = case m of
+        MemberExtraBlock _ -> []
+        MemberBlockField _ -> []
+        MemberBlockDirective bd -> [bd]
 
 data ExtraBlockHeader = ExtraBlockHeader
     { extraBlockHeaderKey :: Text
@@ -587,12 +597,23 @@ data BlockField = BlockField
     }
     deriving (Show)
 
-data Member = MemberExtraBlock ExtraBlock | MemberBlockField BlockField
+data BlockDirective = BlockDirective
+  { blockDirectiveDocCommentBlock :: Maybe DocCommentBlock
+  , blockDirectiveTokens :: [String]
+  , blockDirectivePos :: SourcePos
+  }
+  deriving (Show)
+
+data Member =
+  MemberExtraBlock ExtraBlock
+  | MemberBlockField BlockField
+  | MemberBlockDirective BlockDirective
     deriving (Show)
 
 -- | The source position at the beginning of the member's final line.
 memberEndPos :: Member -> SourcePos
 memberEndPos (MemberBlockField fs) = blockFieldPos fs
+memberEndPos (MemberBlockDirective d) = blockDirectivePos d
 memberEndPos (MemberExtraBlock ex) = memberEndPos . NEL.last . extraBlockMembers $ ex
 
 -- | Represents an entity member as a list of BlockFields
@@ -600,6 +621,7 @@ memberEndPos (MemberExtraBlock ex) = memberEndPos . NEL.last . extraBlockMembers
 -- @since 2.16.0.0
 memberBlockFields :: Member -> [BlockField]
 memberBlockFields (MemberBlockField fs) = [fs]
+memberBlockFields (MemberBlockDirective _) = []
 memberBlockFields (MemberExtraBlock ex) = foldMap memberBlockFields . extraBlockMembers $ ex
 
 extraBlocksAsMap :: [ExtraBlock] -> M.Map Text [ExtraLine]
@@ -694,7 +716,7 @@ blockField = do
     pos <- getSourcePos
     fn <- L.lexeme spaceConsumer fieldName
     ft <- L.lexeme spaceConsumer typeExpr
-    fa <- optional $ L.lexeme spaceConsumer (many attribute)
+    fa <- optional $ L.lexeme spaceConsumer (some attribute) -- todo dtp: some or many?
     _ <- setLastDocumentablePosition
     lookAhead (void newline <|> eof)
     pure $
@@ -707,8 +729,32 @@ blockField = do
                 , blockFieldPos = pos
                 }
 
+directiveToken :: Parser String
+directiveToken = some $ choice [ contentChar
+                               , char '('
+                               , char ')'
+                               ]
+
+blockDirective :: Parser Member
+blockDirective = do
+  dcb <- getDcb
+  pos <- getSourcePos
+  tokens <- some $ L.lexeme spaceConsumer directiveToken
+  _ <- setLastDocumentablePosition
+  lookAhead (void newline <|> eof)
+  pure $
+    MemberBlockDirective
+        BlockDirective
+            { blockDirectiveDocCommentBlock = dcb
+            , blockDirectiveTokens = tokens
+            , blockDirectivePos = pos
+            }
+
 member :: Parser Member
-member = try extraBlock <|> blockField
+member = choice [ try extraBlock
+                , blockField
+                , blockDirective
+                ]
 
 entityBlock :: Parser EntityBlock
 entityBlock = do

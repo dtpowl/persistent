@@ -2,10 +2,12 @@
 {-# LANGUAGE LambdaCase #-}
 
 module Database.Persist.Quasi.Internal.TypeParser
-  ( TypeExpr
-  , typeExpr
-  , typeExprContent
-  ) where
+-- todo dtp:
+--  ( TypeExpr
+--  , typeExpr
+--  , typeExprContent
+--  ) where
+  where
 
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -15,7 +17,9 @@ import qualified Text.Megaparsec.Char.Lexer as L
 
 data TypeExpr
   = TypeApplication TypeConstructor [TypeExpr]
-  | TypelevelString String
+  | TypeLitString String
+  | TypeLitInt String
+  | TypeLitPromotedConstructor TypeConstructor
   deriving (Show, Eq)
 
 data TypeConstructor
@@ -27,15 +31,17 @@ typeExpr :: (MonadParsec e String) m => m TypeExpr
 typeExpr = label "type expression" $ do
   choice [ listType
          , typeApplication
-         , typelevelString
          , whitespaceBetween '(' typeExpr ')'
+         , typeLitString
+         , typeLitInt
+         , typeLitPromotedConstructor
          ]
 
 -- parses "normal" type constructors, including nullary ones.
 typeConstructor :: (MonadParsec e String) m => m TypeConstructor
 typeConstructor = do
   first <- upperChar
-  rest <- many alphaNumChar
+  rest <- many $ choice [alphaNumChar, char '.', char '\'']
   pure $ TypeConstructor (first : rest)
 
 whitespaceBetween :: (MonadParsec e String) m => Char -> m a -> Char -> m a
@@ -48,10 +54,19 @@ typeApplication = do
   args <- many (typeExpr <* optional hspace)
   pure $ TypeApplication tc args
 
-typelevelString :: (MonadParsec e String) m => m TypeExpr
-typelevelString = do
+typeLitString :: (MonadParsec e String) m => m TypeExpr
+typeLitString = do
   s <- char '"' *> manyTill L.charLiteral (char '"')
-  pure $ TypelevelString s
+  pure $ TypeLitString s
+
+typeLitInt :: (MonadParsec e String) m => m TypeExpr
+typeLitInt = TypeLitInt <$> some digitChar
+
+typeLitPromotedConstructor :: (MonadParsec e String) m => m TypeExpr
+typeLitPromotedConstructor = do
+  _ <- char '\''
+  _ <- optional hspace
+  TypeLitPromotedConstructor <$> typeConstructor
 
 listType :: (MonadParsec e String) m => m TypeExpr
 listType = do
@@ -63,10 +78,13 @@ typeExprContent = typeExprContent' False
 
 typeExprContent' :: Bool -> TypeExpr -> Text
 typeExprContent' wrapped = \case
-  TypelevelString s -> mconcat [ "\""
+  TypeLitString s -> mconcat [ "\""
                                , T.pack s
                                ,"\""
                                ]
+  TypeLitInt s -> T.pack s
+  TypeLitPromotedConstructor (TypeConstructor s) -> T.pack ('\'' : s)
+  TypeLitPromotedConstructor ListConstructor -> T.pack $ "'[]"
   TypeApplication tc exps -> typeApplicationContent tc exps wrapped
   where
     typeArgsListContent :: [TypeExpr] -> Text
