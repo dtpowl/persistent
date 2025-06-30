@@ -21,7 +21,7 @@ module Database.Persist.Quasi.Internal.ModelParser
     , parsedEntityDefExtras
     , parsedEntityDefSpan
     , parseSource
-    , memberBlockAttrs
+    , memberBlockFields
     , ParserWarning
     , parserWarningMessage
     , ParseResult
@@ -269,6 +269,9 @@ data Attribute
 data BlockKey = BlockKey Text
   deriving (Show)
 
+data FieldName = FieldName Text
+  deriving (Show)
+
 -- @since 2.16.0.0
 data CommentAttribute
     = DocComment Text
@@ -287,6 +290,9 @@ attributeContent = \case
 
 blockKeyContent :: BlockKey -> Text
 blockKeyContent (BlockKey t) = t
+
+fieldNameContent :: FieldName -> Text
+fieldNameContent (FieldName t) = t
 
 commentContent :: CommentAttribute -> Text
 commentContent = \case
@@ -483,6 +489,12 @@ blockKey = label "block key" $ do
     rl <- many alphaNumChar
     pure . BlockKey . Text.pack $ fl : rl
 
+fieldName :: Parser FieldName
+fieldName = label "field name" $ do
+    fl <- lowerChar
+    rl <- many alphaNumChar
+    pure . FieldName . Text.pack $ fl : rl
+
 ptext :: Parser Attribute
 ptext = label "plain attribute" $ do
     str <- L.lexeme spaceConsumer $ do
@@ -538,19 +550,19 @@ entityBlockLastPos eb = case entityBlockMembers eb of
     [] -> entityBlockFirstPos eb
     members -> maximum $ fmap memberEndPos members
 
-entityBlockBlockAttrs :: EntityBlock -> [BlockAttr]
-entityBlockBlockAttrs = foldMap f <$> entityBlockMembers
+entityBlockBlockFields :: EntityBlock -> [BlockField]
+entityBlockBlockFields = foldMap f <$> entityBlockMembers
   where
     f m = case m of
         MemberExtraBlock _ -> []
-        MemberBlockAttr ba -> [ba]
+        MemberBlockField ba -> [ba]
 
 entityBlockExtraBlocks :: EntityBlock -> [ExtraBlock]
 entityBlockExtraBlocks = foldMap f <$> entityBlockMembers
   where
     f m = case m of
         MemberExtraBlock eb -> [eb]
-        MemberBlockAttr _ -> []
+        MemberBlockField _ -> []
 
 data ExtraBlockHeader = ExtraBlockHeader
     { extraBlockHeaderKey :: Text
@@ -566,27 +578,29 @@ data ExtraBlock = ExtraBlock
     }
     deriving (Show)
 
-data BlockAttr = BlockAttr
-    { blockAttrDocCommentBlock :: Maybe DocCommentBlock
-    , blockAttrAttributes :: [Attribute]
-    , blockAttrPos :: SourcePos
+data BlockField = BlockField
+    { blockFieldDocCommentBlock :: Maybe DocCommentBlock
+    , blockFieldName :: FieldName
+    , blockFieldType :: TypeExpr
+    , blockFieldAttributes :: [Attribute]
+    , blockFieldPos :: SourcePos
     }
     deriving (Show)
 
-data Member = MemberExtraBlock ExtraBlock | MemberBlockAttr BlockAttr
+data Member = MemberExtraBlock ExtraBlock | MemberBlockField BlockField
     deriving (Show)
 
 -- | The source position at the beginning of the member's final line.
 memberEndPos :: Member -> SourcePos
-memberEndPos (MemberBlockAttr fs) = blockAttrPos fs
+memberEndPos (MemberBlockField fs) = blockFieldPos fs
 memberEndPos (MemberExtraBlock ex) = memberEndPos . NEL.last . extraBlockMembers $ ex
 
--- | Represents an entity member as a list of BlockAttrs
+-- | Represents an entity member as a list of BlockFields
 --
 -- @since 2.16.0.0
-memberBlockAttrs :: Member -> [BlockAttr]
-memberBlockAttrs (MemberBlockAttr fs) = [fs]
-memberBlockAttrs (MemberExtraBlock ex) = foldMap memberBlockAttrs . extraBlockMembers $ ex
+memberBlockFields :: Member -> [BlockField]
+memberBlockFields (MemberBlockField fs) = [fs]
+memberBlockFields (MemberExtraBlock ex) = foldMap memberBlockFields . extraBlockMembers $ ex
 
 extraBlocksAsMap :: [ExtraBlock] -> M.Map Text [ExtraLine]
 extraBlocksAsMap exs = M.fromList $ fmap asPair exs
@@ -594,7 +608,7 @@ extraBlocksAsMap exs = M.fromList $ fmap asPair exs
     asPair ex =
         (extraBlockHeaderKey . extraBlockExtraBlockHeader $ ex, extraLines ex)
     extraLines ex = foldMap asExtraLine (extraBlockMembers ex)
-    asExtraLine (MemberBlockAttr fs) = [attributeContent <$> blockAttrAttributes fs]
+    asExtraLine (MemberBlockField fs) = [attributeContent <$> blockFieldAttributes fs]
     asExtraLine _ = []
 
 entityHeader :: Parser EntityHeader
@@ -645,11 +659,11 @@ getDcb = do
 extraBlock :: Parser Member
 extraBlock = L.indentBlock spaceConsumerN innerParser
   where
-    mkExtraBlockMember dcb (header, blockAttrs) =
+    mkExtraBlockMember dcb (header, blockFields) =
         MemberExtraBlock
             ExtraBlock
                 { extraBlockExtraBlockHeader = header
-                , extraBlockMembers = ensureNonEmpty blockAttrs
+                , extraBlockMembers = ensureNonEmpty blockFields
                 , extraBlockDocCommentBlock = dcb
                 }
     ensureNonEmpty members = case NEL.nonEmpty members of
@@ -659,7 +673,7 @@ extraBlock = L.indentBlock spaceConsumerN innerParser
         dcb <- getDcb
         header <- extraBlockHeader
         pure $
-            L.IndentSome Nothing (return . mkExtraBlockMember dcb . (header,)) blockAttr
+            L.IndentSome Nothing (return . mkExtraBlockMember dcb . (header,)) blockField
 
 extraBlockHeader :: Parser ExtraBlockHeader
 extraBlockHeader = do
@@ -674,23 +688,27 @@ extraBlockHeader = do
             , extraBlockHeaderPos = pos
             }
 
-blockAttr :: Parser Member
-blockAttr = do
+blockField :: Parser Member
+blockField = do
     dcb <- getDcb
     pos <- getSourcePos
-    line <- some attribute
+    fn <- L.lexeme spaceConsumer fieldName
+    ft <- L.lexeme spaceConsumer typeExpr
+    fa <- optional $ L.lexeme spaceConsumer (many attribute)
     _ <- setLastDocumentablePosition
     lookAhead (void newline <|> eof)
     pure $
-        MemberBlockAttr
-            BlockAttr
-                { blockAttrDocCommentBlock = dcb
-                , blockAttrAttributes = line
-                , blockAttrPos = pos
+        MemberBlockField
+            BlockField
+                { blockFieldDocCommentBlock = dcb
+                , blockFieldName = fn
+                , blockFieldType = ft
+                , blockFieldAttributes = fromMaybe [] fa
+                , blockFieldPos = pos
                 }
 
 member :: Parser Member
-member = try extraBlock <|> blockAttr
+member = try extraBlock <|> blockField
 
 entityBlock :: Parser EntityBlock
 entityBlock = do
@@ -767,8 +785,8 @@ toParsedEntityDef mSourceLoc eb =
     isSum = entityHeaderSum . entityBlockEntityHeader $ eb
     entityNameHS = EntityNameHS . entityHeaderTableName . entityBlockEntityHeader $ eb
 
-    attributePair a = (blockAttrAttributes a, docCommentBlockText <$> blockAttrDocCommentBlock a)
-    parsedFieldAttributes = fmap attributePair (entityBlockBlockAttrs eb)
+    attributePair a = (blockFieldAttributes a, docCommentBlockText <$> blockFieldDocCommentBlock a)
+    parsedFieldAttributes = fmap attributePair (entityBlockBlockFields eb)
 
     extras = extraBlocksAsMap (entityBlockExtraBlocks eb)
     filepath = maybe "" locFile mSourceLoc

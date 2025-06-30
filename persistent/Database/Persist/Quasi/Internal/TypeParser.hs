@@ -24,11 +24,12 @@ data TypeConstructor
   deriving (Show, Eq)
 
 typeExpr :: (MonadParsec e String) m => m TypeExpr
-typeExpr = choice [ listType
-                  , typeApplication
-                  , typelevelString
-                  , whitespaceBetween '(' typeExpr ')'
-                  ]
+typeExpr = label "type expression" $ do
+  choice [ listType
+         , typeApplication
+         , typelevelString
+         , whitespaceBetween '(' typeExpr ')'
+         ]
 
 -- parses "normal" type constructors, including nullary ones.
 typeConstructor :: (MonadParsec e String) m => m TypeConstructor
