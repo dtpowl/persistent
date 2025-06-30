@@ -12,12 +12,15 @@ module Database.Persist.Quasi.Internal.ModelParser
     , Attribute (..)
     , attribute
     , attributeContent
+    , Directive (..)
+    , directiveContent
     , ParsedEntityDef
     , parsedEntityDefComments
     , parsedEntityDefEntityName
     , parsedEntityDefIsSum
     , parsedEntityDefEntityAttributes
     , parsedEntityDefFieldAttributes
+    , parsedEntityDefDirectives
     , parsedEntityDefExtras
     , parsedEntityDefSpan
     , parseSource
@@ -288,6 +291,13 @@ attributeContent = \case
     Parenthetical s -> s
     PText s -> s
 
+-- | Converts a directive into a Text representation for second-stage parsing or
+-- presentation to the user
+--
+-- @since todo dtp
+directiveContent :: Directive -> Text
+directiveContent = Text.pack . intercalate " " . directiveTokens
+
 blockKeyContent :: BlockKey -> Text
 blockKeyContent (BlockKey t) = t
 
@@ -514,8 +524,9 @@ data ParsedEntityDef = ParsedEntityDef
     { parsedEntityDefComments :: [Text]
     , parsedEntityDefEntityName :: EntityNameHS
     , parsedEntityDefIsSum :: Bool
-    , parsedEntityDefEntityAttributes :: [Attr]
+    , parsedEntityDefEntityAttributes :: [Text] -- this was `[Attr]`? why did that compile? todo dtp
     , parsedEntityDefFieldAttributes :: [([Attribute], Maybe Text)]
+    , parsedEntityDefDirectives :: [(Directive, Maybe Text)]
     , parsedEntityDefExtras :: M.Map Text [ExtraLine]
     , parsedEntityDefSpan :: Maybe SourceSpan
     }
@@ -556,7 +567,7 @@ entityBlockBlockFields = foldMap f <$> entityBlockMembers
     f m = case m of
         MemberExtraBlock _ -> []
         MemberBlockField ba -> [ba]
-        MemberBlockDirective _ -> []
+        MemberDirective _ -> []
 
 entityBlockExtraBlocks :: EntityBlock -> [ExtraBlock]
 entityBlockExtraBlocks = foldMap f <$> entityBlockMembers
@@ -564,15 +575,15 @@ entityBlockExtraBlocks = foldMap f <$> entityBlockMembers
     f m = case m of
         MemberExtraBlock eb -> [eb]
         MemberBlockField _ -> []
-        MemberBlockDirective _ -> []
+        MemberDirective _ -> []
 
-entityBlockDirectives :: EntityBlock -> [BlockDirective]
+entityBlockDirectives :: EntityBlock -> [Directive]
 entityBlockDirectives = foldMap f <$> entityBlockMembers
   where
     f m = case m of
         MemberExtraBlock _ -> []
         MemberBlockField _ -> []
-        MemberBlockDirective bd -> [bd]
+        MemberDirective bd -> [bd]
 
 data ExtraBlockHeader = ExtraBlockHeader
     { extraBlockHeaderKey :: Text
@@ -597,23 +608,23 @@ data BlockField = BlockField
     }
     deriving (Show)
 
-data BlockDirective = BlockDirective
-  { blockDirectiveDocCommentBlock :: Maybe DocCommentBlock
-  , blockDirectiveTokens :: [String]
-  , blockDirectivePos :: SourcePos
+data Directive = Directive
+  { directiveDocCommentBlock :: Maybe DocCommentBlock
+  , directiveTokens :: [String]
+  , directivePos :: SourcePos
   }
   deriving (Show)
 
 data Member =
   MemberExtraBlock ExtraBlock
   | MemberBlockField BlockField
-  | MemberBlockDirective BlockDirective
+  | MemberDirective Directive
     deriving (Show)
 
 -- | The source position at the beginning of the member's final line.
 memberEndPos :: Member -> SourcePos
 memberEndPos (MemberBlockField fs) = blockFieldPos fs
-memberEndPos (MemberBlockDirective d) = blockDirectivePos d
+memberEndPos (MemberDirective d) = directivePos d
 memberEndPos (MemberExtraBlock ex) = memberEndPos . NEL.last . extraBlockMembers $ ex
 
 -- | Represents an entity member as a list of BlockFields
@@ -621,7 +632,7 @@ memberEndPos (MemberExtraBlock ex) = memberEndPos . NEL.last . extraBlockMembers
 -- @since 2.16.0.0
 memberBlockFields :: Member -> [BlockField]
 memberBlockFields (MemberBlockField fs) = [fs]
-memberBlockFields (MemberBlockDirective _) = []
+memberBlockFields (MemberDirective _) = []
 memberBlockFields (MemberExtraBlock ex) = foldMap memberBlockFields . extraBlockMembers $ ex
 
 extraBlocksAsMap :: [ExtraBlock] -> M.Map Text [ExtraLine]
@@ -730,30 +741,31 @@ blockField = do
                 }
 
 directiveToken :: Parser String
-directiveToken = some $ choice [ contentChar
-                               , char '('
-                               , char ')'
-                               ]
+directiveToken = some $
+  choice [ contentChar
+         , char '('
+         , char ')'
+         ]
 
-blockDirective :: Parser Member
-blockDirective = do
+directive :: Parser Member
+directive = do
   dcb <- getDcb
   pos <- getSourcePos
   tokens <- some $ L.lexeme spaceConsumer directiveToken
   _ <- setLastDocumentablePosition
   lookAhead (void newline <|> eof)
   pure $
-    MemberBlockDirective
-        BlockDirective
-            { blockDirectiveDocCommentBlock = dcb
-            , blockDirectiveTokens = tokens
-            , blockDirectivePos = pos
+    MemberDirective
+        Directive
+            { directiveDocCommentBlock = dcb
+            , directiveTokens = tokens
+            , directivePos = pos
             }
 
 member :: Parser Member
 member = choice [ try extraBlock
                 , blockField
-                , blockDirective
+                , directive
                 ]
 
 entityBlock :: Parser EntityBlock
@@ -817,6 +829,7 @@ toParsedEntityDef mSourceLoc eb =
         , parsedEntityDefIsSum = isSum
         , parsedEntityDefEntityAttributes = entityAttributes
         , parsedEntityDefFieldAttributes = parsedFieldAttributes
+        , parsedEntityDefDirectives = parsedDirectives
         , parsedEntityDefExtras = extras
         , parsedEntityDefSpan = mSpan
         }
@@ -833,6 +846,9 @@ toParsedEntityDef mSourceLoc eb =
 
     attributePair a = (blockFieldAttributes a, docCommentBlockText <$> blockFieldDocCommentBlock a)
     parsedFieldAttributes = fmap attributePair (entityBlockBlockFields eb)
+
+    directivePair d = (d, docCommentBlockText <$> directiveDocCommentBlock d)
+    parsedDirectives = fmap directivePair (entityBlockDirectives eb)
 
     extras = extraBlocksAsMap (entityBlockExtraBlocks eb)
     filepath = maybe "" locFile mSourceLoc
