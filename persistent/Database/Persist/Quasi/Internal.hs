@@ -206,7 +206,7 @@ entityNamesFromParsedDef ps parsedEntDef = (entNameHS, entNameDB)
             getDbName
                 ps
                 (unEntityNameHS entNameHS)
-                (parsedEntityDefEntityAttributes parsedEntDef)
+                (attributeContent <$> parsedEntityDefEntityAttributes parsedEntDef)
 
 -- | This type represents an @Id@ declaration in the QuasiQuoted syntax.
 --
@@ -527,9 +527,8 @@ mkUnboundEntityDef ps parsedEntDef =
                     EntityIdField $
                         maybe autoIdField (unboundIdDefToFieldDef (defaultIdName ps) entNameHS) idField
                 , entityAttrs =
-                    parsedEntityDefEntityAttributes parsedEntDef
-                , entityFields =
-                    []
+                    attributeContent <$> parsedEntityDefEntityAttributes parsedEntDef
+                , entityFields = []
                 , entityUniques = entityConstraintDefsUniquesList entityConstraintDefs
                 , entityForeigns = []
                 , entityDerives = concat $ mapMaybe takeDerives (textAttribs ++ textDirectives)
@@ -546,17 +545,17 @@ mkUnboundEntityDef ps parsedEntDef =
     (entNameHS, entNameDB) =
         entityNamesFromParsedDef ps parsedEntDef
 
-    attribs = parsedEntityDefFieldAttributes parsedEntDef
+    fields = parsedEntityDefFields parsedEntDef
     directives = parsedEntityDefDirectives parsedEntDef
 
     cols :: [UnboundFieldDef]
-    cols = foldMap (toList . commentedField ps) attribs
+    cols = foldMap (toList . commentedField ps) fields
 
     textAttribs :: [[Text]]
-    textAttribs = fmap attributeContent . fst <$> attribs
+    textAttribs = entityFieldContent . fst <$> fields
 
     textDirectives :: [[Text]]
-    textDirectives = (:[]) . directiveContent . fst <$> directives
+    textDirectives = directiveContent . fst <$> directives
 
     entityConstraintDefs =
         foldMap
@@ -577,10 +576,10 @@ mkUnboundEntityDef ps parsedEntDef =
 
     commentedField
         :: PersistSettings
-        -> ([Attribute], Maybe Text)
+        -> (EntityField, Maybe Text)
         -> Maybe UnboundFieldDef
-    commentedField s (tokens, mCommentText) = do
-        unb <- takeColsEx s (attributeContent <$> tokens)
+    commentedField s (field, mCommentText) = do
+        unb <- takeColsEx s (entityFieldContent field)
         pure $ unb{unboundFieldComments = mCommentText}
 
     autoIdField :: FieldDef
