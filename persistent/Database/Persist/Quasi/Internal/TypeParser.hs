@@ -27,6 +27,7 @@ data TypeConstructor
   | TypeConstructor String
   deriving (Show, Eq)
 
+-- Parses top-level type expressions
 typeExpr :: (MonadParsec e String) m => m TypeExpr
 typeExpr = label "type expression" $ do
   choice [ listType
@@ -37,7 +38,19 @@ typeExpr = label "type expression" $ do
          , typeLitPromotedConstructor
          ]
 
--- parses "normal" type constructors, including nullary ones.
+-- Parses arguments to a type constructor, in which further
+-- applications must be ()-delimited.
+typeArgExpr :: (MonadParsec e String) m => m TypeExpr
+typeArgExpr = label "type expression" $ do
+  choice [ listType
+         , nullaryTypeApplication
+         , whitespaceBetween '(' typeExpr ')'
+         , typeLitString
+         , typeLitInt
+         , typeLitPromotedConstructor
+         ]
+
+-- parses "normal" type constructors, INCLUDING nullary ones.
 typeConstructor :: (MonadParsec e String) m => m TypeConstructor
 typeConstructor = do
   first <- upperChar
@@ -51,8 +64,14 @@ whitespaceBetween ldelim p rdelim =
 typeApplication :: (MonadParsec e String) m => m TypeExpr
 typeApplication = do
   tc <- typeConstructor <* optional hspace
-  args <- many (typeExpr <* optional hspace)
+  args <- many (typeArgExpr <* optional hspace)
   pure $ TypeApplication tc args
+
+-- ONLY parses applications of nullary constructors.
+nullaryTypeApplication :: (MonadParsec e String) m => m TypeExpr
+nullaryTypeApplication = do
+  tc <- typeConstructor <* optional hspace
+  pure $ TypeApplication tc []
 
 typeLitString :: (MonadParsec e String) m => m TypeExpr
 typeLitString = do
@@ -87,12 +106,12 @@ typeExprContent' wrapped = \case
   TypeLitPromotedConstructor ListConstructor -> T.pack $ "'[]"
   TypeApplication tc exps -> typeApplicationContent tc exps wrapped
   where
-    typeArgsListContent :: [TypeExpr] -> Text
-    typeArgsListContent exps = T.intercalate " " $ fmap (typeExprContent' True) exps
+    typeArgsListContent :: Bool -> [TypeExpr] -> Text
+    typeArgsListContent wrapped exps = T.intercalate " " $ fmap (typeExprContent' wrapped) exps
 
     typeApplicationContent :: TypeConstructor -> [TypeExpr] -> Bool -> Text
     typeApplicationContent ListConstructor args _ = mconcat [ "["
-                                                            , typeArgsListContent args
+                                                            , typeArgsListContent False args
                                                             , "]"
                                                             ]
     typeApplicationContent (TypeConstructor s) [] _ = T.pack s
@@ -104,5 +123,5 @@ typeExprContent' wrapped = \case
     typeApplicationContent (TypeConstructor s) exps False =
       mconcat [ T.pack s
               , " "
-              , typeArgsListContent exps
+              , typeArgsListContent True exps
               ]

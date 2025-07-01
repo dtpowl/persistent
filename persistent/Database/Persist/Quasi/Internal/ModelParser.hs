@@ -733,7 +733,7 @@ entityField = do
     dcb <- getDcb
     pos <- getSourcePos
     fn <- L.lexeme spaceConsumer fieldName
-    ft <- L.lexeme spaceConsumer typeExpr
+    ft <- L.lexeme spaceConsumer typeArgExpr -- todo dtp: note that we're using typeArgExpr; leave a good comment
     fa <- optional $ L.lexeme spaceConsumer (some attribute) -- todo dtp: some or many?
     _ <- setLastDocumentablePosition
     lookAhead (void newline <|> eof)
@@ -750,6 +750,7 @@ entityField = do
 directiveName :: Parser String
 directiveName = label "directive name" $
                     choice [ string "deriving"
+                           , string "parent"
                            , directiveName'
                            ]
   where
@@ -763,6 +764,7 @@ directiveArgument = some $
   choice [ contentChar
          , char '('
          , char ')'
+         , char '=' -- todo dtp: comment about this
          ]
 
 directive :: Parser Member
