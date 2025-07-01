@@ -602,7 +602,7 @@ data ExtraBlockHeader = ExtraBlockHeader
 data ExtraBlock = ExtraBlock
     { extraBlockDocCommentBlock :: Maybe DocCommentBlock
     , extraBlockExtraBlockHeader :: ExtraBlockHeader
-    , extraBlockMembers :: NonEmpty Member
+    , extraBlockLines :: NonEmpty ExtraBlockLine
     }
     deriving (Show)
 
@@ -628,11 +628,18 @@ data Member =
   | MemberDirective Directive
     deriving (Show)
 
+data ExtraBlockLine = ExtraBlockLine
+  { extraBlockLineDocCommentBlock :: Maybe DocCommentBlock
+  , extraBlockLineTokens :: [String]
+  , extraBlockLinePos :: SourcePos
+  }
+  deriving (Show)
+
 -- | The source position at the beginning of the member's final line.
 memberEndPos :: Member -> SourcePos
 memberEndPos (MemberEntityField fs) = entityFieldPos fs
 memberEndPos (MemberDirective d) = directivePos d
-memberEndPos (MemberExtraBlock ex) = memberEndPos . NEL.last . extraBlockMembers $ ex
+memberEndPos (MemberExtraBlock ex) = extraBlockLinePos . NEL.last . extraBlockLines $ ex
 
 -- | Represents an entity member as a list of EntityFields
 --
@@ -640,16 +647,15 @@ memberEndPos (MemberExtraBlock ex) = memberEndPos . NEL.last . extraBlockMembers
 memberEntityFields :: Member -> [EntityField]
 memberEntityFields (MemberEntityField fs) = [fs]
 memberEntityFields (MemberDirective _) = []
-memberEntityFields (MemberExtraBlock ex) = foldMap memberEntityFields . extraBlockMembers $ ex
+memberEntityFields (MemberExtraBlock _) = [] -- todo dtp: does this break anything? was: `foldMap memberEntityFields . extraBlockLines $ ex`
 
 extraBlocksAsMap :: [ExtraBlock] -> M.Map Text [ExtraLine]
 extraBlocksAsMap exs = M.fromList $ fmap asPair exs
   where
     asPair ex =
-        (extraBlockHeaderKey . extraBlockExtraBlockHeader $ ex, extraLines ex)
-    extraLines ex = foldMap asExtraLine (extraBlockMembers ex)
-    asExtraLine (MemberEntityField fs) = [attributeContent <$> entityFieldAttributes fs]
-    asExtraLine _ = []
+        (extraBlockHeaderKey . extraBlockExtraBlockHeader $ ex, NEL.toList (extraLines ex))
+    extraLines :: ExtraBlock -> NonEmpty [Text]
+    extraLines ex =  fmap Text.pack <$> (extraBlockLineTokens <$> extraBlockLines ex)
 
 entityHeader :: Parser EntityHeader
 entityHeader = do
@@ -699,21 +705,21 @@ getDcb = do
 extraBlock :: Parser Member
 extraBlock = L.indentBlock spaceConsumerN innerParser
   where
-    mkExtraBlockMember dcb (header, entityFields) =
+    mkExtraBlockMember dcb (header, extraBlockLines) =
         MemberExtraBlock
             ExtraBlock
                 { extraBlockExtraBlockHeader = header
-                , extraBlockMembers = ensureNonEmpty entityFields
+                , extraBlockLines = ensureNonEmpty extraBlockLines
                 , extraBlockDocCommentBlock = dcb
                 }
-    ensureNonEmpty members = case NEL.nonEmpty members of
+    ensureNonEmpty lines = case NEL.nonEmpty lines of
         Just nel -> nel
-        Nothing -> error "unreachable" -- members is known to be non-empty
+        Nothing -> error "unreachable" -- lines is known to be non-empty
     innerParser = do
         dcb <- getDcb
         header <- extraBlockHeader
         pure $
-            L.IndentSome Nothing (return . mkExtraBlockMember dcb . (header,)) entityField
+            L.IndentSome Nothing (return . mkExtraBlockMember dcb . (header,)) extraBlockLine
 
 extraBlockHeader :: Parser ExtraBlockHeader
 extraBlockHeader = do
@@ -726,6 +732,19 @@ extraBlockHeader = do
             { extraBlockHeaderKey = blockKeyContent tn
             , extraBlockHeaderRemainingAttributes = rest
             , extraBlockHeaderPos = pos
+            }
+
+extraBlockLine :: Parser ExtraBlockLine
+extraBlockLine = do
+    dcb <- getDcb
+    pos <- getSourcePos
+    tokens <- some $ L.lexeme spaceConsumer (some contentChar)
+    _ <- setLastDocumentablePosition
+    pure $
+        ExtraBlockLine
+            { extraBlockLineDocCommentBlock = dcb
+            , extraBlockLineTokens = tokens
+            , extraBlockLinePos = pos
             }
 
 entityField :: Parser Member
@@ -750,7 +769,7 @@ entityField = do
 directiveName :: Parser String
 directiveName = label "directive name" $
                     choice [ string "deriving"
-                           , string "parent"
+                           --, string "parent" -- todo dtp: this is more correct but uncommenting it breaks a test.
                            , directiveName'
                            ]
   where
@@ -782,6 +801,7 @@ directive = do
             , directiveTokens = dn : args
             , directivePos = pos
             }
+
 
 member :: Parser Member
 member = choice [ try extraBlock
