@@ -274,9 +274,6 @@ data Attribute
 data BlockKey = BlockKey Text
   deriving (Show)
 
-data FieldName = FieldName Text
-  deriving (Show)
-
 -- @since 2.16.0.0
 data CommentAttribute
     = DocComment Text
@@ -301,15 +298,25 @@ directiveContent :: Directive -> [Text]
 directiveContent = (fmap Text.pack) . directiveTokens
 
 entityFieldContent :: EntityField -> [Text]
-entityFieldContent f = [ (fieldNameContent . entityFieldName) f
+entityFieldContent f = [ fieldNameAndStrictnessAsText f
                        , (typeExprContent . entityFieldType) f
                        ] ++ fmap attributeContent (entityFieldAttributes f)
 
+-- todo dtp: is this needed?
 blockKeyContent :: BlockKey -> Text
 blockKeyContent (BlockKey t) = t
 
-fieldNameContent :: FieldName -> Text
-fieldNameContent (FieldName t) = t
+-- todo dtp: comment about how this is temporary
+fieldNameAndStrictnessAsText :: EntityField -> Text
+fieldNameAndStrictnessAsText f =
+  let
+    s = case entityFieldStrictness f of
+                   Just Strict -> "!"
+                   Just Lazy -> "~"
+                   Nothing -> ""
+    (FieldName fn) = entityFieldName f
+  in
+    s <> fn
 
 commentContent :: CommentAttribute -> Text
 commentContent = \case
@@ -400,6 +407,7 @@ spaceConsumerN =
         skipComment
         empty
 
+-- todo dtp: comment about how this is temporary?
 contentChar :: Parser Char
 contentChar =
     choice
@@ -506,6 +514,14 @@ blockKey = label "block key" $ do
     rl <- many alphaNumChar
     pure . BlockKey . Text.pack $ fl : rl
 
+fieldStrictness :: Parser FieldStrictness
+fieldStrictness = label "strictness sigil" $ do
+  c <- char '!' <|> char '~'
+  case c of
+    '!' -> pure Strict
+    '~' -> pure Lazy
+    _ -> error "unreachable"
+
 fieldName :: Parser FieldName
 fieldName = label "field name" $ do
     fl <- lowerChar
@@ -523,8 +539,6 @@ ptext = label "plain attribute" $ do
     initialChar :: Parser Char
     initialChar = choice [ alphaNumChar
                          , char '[' -- todo dtp: I think we can eliminate this square bracket?
-                         , char '!' -- todo dtp: the bang and wiggle should be different attribute types prob
-                         , char '~'
                          ]
 
 data ParsedEntityDef = ParsedEntityDef
@@ -606,8 +620,15 @@ data ExtraBlock = ExtraBlock
     }
     deriving (Show)
 
+data FieldStrictness = Strict | Lazy
+  deriving (Show)
+
+data FieldName = FieldName Text
+  deriving (Show)
+
 data EntityField = EntityField
     { entityFieldDocCommentBlock :: Maybe DocCommentBlock
+    , entityFieldStrictness :: Maybe FieldStrictness
     , entityFieldName :: FieldName
     , entityFieldType :: TypeExpr
     , entityFieldAttributes :: [Attribute]
@@ -751,6 +772,7 @@ entityField :: Parser Member
 entityField = do
     dcb <- getDcb
     pos <- getSourcePos
+    ss <- optional fieldStrictness
     fn <- L.lexeme spaceConsumer fieldName
     ft <- L.lexeme spaceConsumer typeArgExpr -- todo dtp: note that we're using typeArgExpr; leave a good comment
     fa <- optional $ L.lexeme spaceConsumer (some attribute) -- todo dtp: some or many?
@@ -760,6 +782,7 @@ entityField = do
         MemberEntityField
             EntityField
                 { entityFieldDocCommentBlock = dcb
+                , entityFieldStrictness = ss
                 , entityFieldName = fn
                 , entityFieldType = ft
                 , entityFieldAttributes = fromMaybe [] fa
@@ -769,7 +792,7 @@ entityField = do
 directiveName :: Parser String
 directiveName = label "directive name" $
                     choice [ string "deriving"
-                           --, string "parent" -- todo dtp: this is more correct but uncommenting it breaks a test.
+                           , string "parent" -- todo dtp: this is more correct but uncommenting it breaks a test.
                            , directiveName'
                            ]
   where
@@ -778,13 +801,11 @@ directiveName = label "directive name" $
       rl <- many alphaNumChar
       pure (fl : rl)
 
+-- todo dtp: comment about how this is temporary
 directiveArgument :: Parser String
-directiveArgument = some $
-  choice [ contentChar
-         , char '('
-         , char ')'
-         , char '=' -- todo dtp: comment about this
-         ]
+directiveArgument = choice [ parenthetical'
+                           , some $ contentChar <|> char '='
+                           ]
 
 directive :: Parser Member
 directive = do
@@ -801,7 +822,6 @@ directive = do
             , directiveTokens = dn : args
             , directivePos = pos
             }
-
 
 member :: Parser Member
 member = choice [ try extraBlock

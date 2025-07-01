@@ -5,6 +5,7 @@ module Database.Persist.Quasi.Internal.TypeParser
 -- todo dtp:
 --  ( TypeExpr
 --  , typeExpr
+--  , typeArgExpr
 --  , typeExprContent
 --  ) where
   where

@@ -486,7 +486,7 @@ User
             let
                 [user] = defs definitions
             evaluate (unboundEntityDef user)
-                `shouldErrorWithMessage` "4:20:\n  |\n4 |     age  (Maybe Int\n  |                    ^\nunexpected newline\nexpecting '!', '\"', ''', '(', ')', ',', '-', '.', ':', '[', '\\', ']', '_', '~', alphanumeric character, space, or tab\n"
+                `shouldErrorWithMessage` "4:20:\n  |\n4 |     age  (Maybe Int\n  |                    ^\nunexpected newline\nexpecting ''', ')', '.', alphanumeric character, type expression, or white space\n"
 
         it "errors on duplicate cascade update declarations" $ do
             let
