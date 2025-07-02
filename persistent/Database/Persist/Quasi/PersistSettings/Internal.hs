@@ -38,6 +38,8 @@ data PersistSettings = PersistSettings
     -- ^ Whether and with what severity to disallow tabs in entity source text.
     --
     -- @since 2.16.0.0
+    , psQuotedFieldAttributeErrorLevel :: Maybe ParserErrorLevel
+    -- ^ todo dtp: doc comment
     }
 
 defaultPersistSettings, upperCaseSettings, lowerCaseSettings :: PersistSettings
@@ -48,6 +50,7 @@ defaultPersistSettings =
         , psStrictFields = True
         , psIdName = "id"
         , psTabErrorLevel = Just LevelWarning
+        , psQuotedFieldAttributeErrorLevel = Just LevelWarning
         }
 upperCaseSettings = defaultPersistSettings
 lowerCaseSettings =
@@ -181,3 +184,12 @@ getPsTabErrorLevel = psTabErrorLevel
 setPsTabErrorLevel
     :: Maybe ParserErrorLevel -> PersistSettings -> PersistSettings
 setPsTabErrorLevel l ps = ps{psTabErrorLevel = l}
+
+-- todo dtp document
+getPsQuotedFieldAttributeErrorLevel :: PersistSettings -> Maybe ParserErrorLevel
+getPsQuotedFieldAttributeErrorLevel = psQuotedFieldAttributeErrorLevel
+
+-- todo dtp document
+setPsQuotedFieldAttributeErrorLevel
+  :: Maybe ParserErrorLevel -> PersistSettings -> PersistSettings
+setPsQuotedFieldAttributeErrorLevel l ps = ps{psQuotedFieldAttributeErrorLevel = l}

@@ -111,7 +111,7 @@ spec = describe "Quasi" $ do
                         , unboundFieldGenerated = Nothing
                         }
 
-    describe "tokenization" $ do
+    describe "attribute parsing" $ do
         let
             tokenize :: String -> ParseResult [Attribute]
             tokenize s = do
@@ -165,7 +165,7 @@ spec = describe "Quasi" $ do
                            )
 
         it "should error if quotes are unterminated" $ do
-          (fmap . first) errorBundlePretty (tokenize "\"foo bar")
+          (fmap . first) errorBundlePretty (tokenize "sql=\"foo bar")
                 `shouldBe` ([], Left
                              ( "1:5:\n  |\n1 | \"foo bar\n  |     ^\nunexpected space\nexpecting '!', '\"', ''', ',', '-', '.', ':', '=', '[', '\\', ']', '_', '~', or alphanumeric character\n"
                              )
@@ -392,7 +392,7 @@ Car
                          ]
             (simplifyUnique <$> entityUniques (unboundEntityDef vehicle)) `shouldBe` []
 
-        it "should not parse loose strings in entity block attributes" $ do
+        it "should not parse loose strings as field attributes" $ do
             let [precompiledCacheParent] = defs [st|
                                                    PrecompiledCacheParent sql="precompiled_cache"
                                                      platformGhcDir FilePath "default=(hex(randomblob(16)))"

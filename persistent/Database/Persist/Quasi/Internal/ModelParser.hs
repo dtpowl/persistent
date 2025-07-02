@@ -39,7 +39,7 @@ module Database.Persist.Quasi.Internal.ModelParser
     ) where
 
 import Control.Applicative (Alternative)
-import Control.Monad (MonadPlus, void)
+import Control.Monad (MonadPlus, void, when)
 import Control.Monad.Reader (MonadReader, ReaderT, asks, runReaderT)
 import Control.Monad.State
 import Control.Monad.Writer
@@ -66,6 +66,8 @@ import Text.Megaparsec.Char
 import qualified Text.Megaparsec.Char.Lexer as L
 import qualified Text.Megaparsec.Stream as TMS
 import Database.Persist.Quasi.Internal.TypeParser
+
+import Debug.Trace -- todo dtp
 
 -- We'll augment the parser with extra state to accumulate comments seen during parsing.
 -- Comments are lexed as whitespace, but will be used to generate documentation later.
@@ -107,6 +109,7 @@ newtype Parser a = Parser
         , MonadState ExtraState
         , MonadReader PersistSettings
         , MonadParsec Void String
+        , MonadFail
         )
 
 type EntityParseError = ParseErrorBundle String Void
@@ -173,11 +176,11 @@ runConfiguredParser ps acc parser fp s = (warnings, either)
             }
 
 reportWarnings :: Set ParserWarning -> Parser ()
-#if MIN_VERSION_megaparsec(9,5,0)
+-- #if MIN_VERSION_megaparsec(9,5,0)
 reportWarnings = Parser . tell
-#else
-reportWarnings _pw = pure ()
-#endif
+-- #else
+-- reportWarnings _pw = pure ()
+-- #endif
 
 -- | Renders a list of EntityParseErrors as a String using `errorBundlePretty`,
 -- separated by line breaks.
@@ -253,6 +256,19 @@ tryOrReport level msg p l r = case level of
     Just LevelWarning -> tryOrWarn msg p l r
     Nothing -> r
 
+--reportLeveledError :: String -> Maybe ParserErrorLevel -> Parser ()
+--reportLeveledError msg el = do
+--  parserState <- getParserState
+--  case el of
+--    Nothing -> pure ()
+--    Just LevelError -> void $ fail msg
+--    Just LevelWarning -> void . reportWarnings . Set.singleton $
+--                         ParserWarning
+--                           { parserWarningExtraMessage = msg <> "\n"
+--                           , parserWarningUnderlyingError = Nothing
+--                           , parserWarningPosState = statePosState parserState
+--                           }
+
 -- | Source location: file and line/col information. This is half of a 'SourceSpan'.
 --
 -- @since 2.16.0.0
@@ -269,6 +285,7 @@ data Attribute
     = Assignment Text Text
     | Parenthetical Text
     | PText Text
+    | Quotation Text -- todo dtp comment about deprecation
     deriving (Eq, Ord, Show)
 
 data BlockKey = BlockKey Text
@@ -289,6 +306,7 @@ attributeContent = \case
     Assignment l r -> mconcat [l, "=", r]
     Parenthetical s -> s
     PText s -> s
+    Quotation s -> s
 
 -- | Converts a directive into a Text representation for second-stage parsing or
 -- presentation to the user
@@ -323,13 +341,32 @@ commentContent = \case
     Comment s -> s
     DocComment s -> s
 
+quotedAttributeErrorMessage :: String
+quotedAttributeErrorMessage = "Unexpected quotation mark in entity field attribute"
+
 attribute :: Parser Attribute
-attribute =
-    choice
-        [ try assignment
-        , parenthetical
-        , ptext
-        ]
+attribute = do
+  quotedFieldAttributeErrorLevel <- asks psQuotedFieldAttributeErrorLevel
+  tryOrReport
+    quotedFieldAttributeErrorLevel
+    "Quoted attributes are deprecated."
+    isQuotedAttributeError
+    attribute'
+    (Quotation . Text.pack <$> quotation)
+  where
+    isQuotedAttributeError (FancyError _ s) = s == Set.singleton (ErrorFail quotedAttributeErrorMessage)
+    isQuotedAttributeError _ = False
+
+attribute' :: Parser Attribute
+attribute' = do
+  q <- lookAhead (optional $ char '"') -- todo dtp: explanation and deprecation notice
+  case q of
+    Just _ -> fail quotedAttributeErrorMessage
+    Nothing -> choice
+                 [ try assignment
+                 , parenthetical
+                 , ptext
+                 ]
 
 docComment :: Parser (SourcePos, CommentAttribute)
 docComment = do
@@ -531,15 +568,10 @@ fieldName = label "field name" $ do
 ptext :: Parser Attribute
 ptext = label "plain attribute" $ do
     str <- L.lexeme spaceConsumer $ do
-      first <- initialChar
+      first <- alphaNumChar
       rest <- many contentChar
       pure (first : rest)
     pure . PText . Text.pack $ str
-  where
-    initialChar :: Parser Char
-    initialChar = choice [ alphaNumChar
-                         , char '[' -- todo dtp: I think we can eliminate this square bracket?
-                         ]
 
 data ParsedEntityDef = ParsedEntityDef
     { parsedEntityDefComments :: [Text]
@@ -775,7 +807,7 @@ entityField = do
     ss <- optional fieldStrictness
     fn <- L.lexeme spaceConsumer fieldName
     ft <- L.lexeme spaceConsumer typeArgExpr -- todo dtp: note that we're using typeArgExpr; leave a good comment
-    fa <- optional $ L.lexeme spaceConsumer (some attribute) -- todo dtp: some or many?
+    fa <- optional $ L.lexeme spaceConsumer (many attribute)
     _ <- setLastDocumentablePosition
     lookAhead (void newline <|> eof)
     pure $
@@ -792,7 +824,6 @@ entityField = do
 directiveName :: Parser String
 directiveName = label "directive name" $
                     choice [ string "deriving"
-                           , string "parent" -- todo dtp: this is more correct but uncommenting it breaks a test.
                            , directiveName'
                            ]
   where
